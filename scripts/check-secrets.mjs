@@ -47,7 +47,7 @@ for (const file of files) {
 
   if (file !== ".env.example") {
     for (const variable of ["GROQ_API_KEY", "GEMINI_API_KEY"]) {
-      const assignment = new RegExp(`${variable}\\s*=\\s*[^\\s'\";]+`, "g");
+      const assignment = new RegExp(`${variable}\\s*=\\s*[^\\s'";]+`, "g");
       if (assignment.test(content)) findings.push(`${file}: literal assignment to ${variable}`);
     }
   }
