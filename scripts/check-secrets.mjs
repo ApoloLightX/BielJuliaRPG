@@ -1,10 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+const SELF = "scripts/check-secrets.mjs";
 const files = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })
   .split("\0")
   .filter(Boolean)
-  .filter((file) => !file.startsWith("docs/") && !file.endsWith("package-lock.json"));
+  .filter(
+    (file) =>
+      file !== SELF &&
+      !file.startsWith("docs/") &&
+      !file.endsWith("package-lock.json")
+  );
 
 const forbiddenNames = [
   "VITE_GROQ_API_KEY",
