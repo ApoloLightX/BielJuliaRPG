@@ -4,6 +4,7 @@ import {
   createGeminiPayload,
   createGroqPayload,
   DEFAULT_GROQ_MODEL,
+  normalizeCampaignId,
   normalizeMessages,
   sanitizePlayers,
 } from "./mestre.js";
@@ -56,5 +57,13 @@ describe("mestre request hardening", () => {
       role: "model",
       parts: [{ text: "resposta" }],
     });
+  });
+
+  it("aceita somente campaign IDs UUID válidos", () => {
+    expect(normalizeCampaignId("550e8400-e29b-41d4-a716-446655440000")).toBe(
+      "550e8400-e29b-41d4-a716-446655440000"
+    );
+    expect(normalizeCampaignId("../../outra-campanha")).toBeNull();
+    expect(normalizeCampaignId("not-a-uuid")).toBeNull();
   });
 });
