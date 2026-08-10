@@ -1,62 +1,108 @@
 # Contas e saves compartilhados
 
-Projeto Supabase do RPG:
+Projeto Supabase esperado:
 
 - Project ref: `xjbkvifjslllqdkwkymv`
-- URL: `https://xjbkvifjslllqdkwkymv.supabase.co`
+- Região esperada: `sa-east-1`
 
-## 1. Aplicar o banco
+## Migrations
 
-No clone local deste repositório:
+As migrations são a fonte de verdade do schema e devem ser aplicadas em ordem:
 
-```bash
-supabase login
-supabase init
-supabase link --project-ref xjbkvifjslllqdkwkymv
-supabase db push
-```
+1. `20260810210600_campaign_saves.sql`
+2. `20260810223500_harden_campaign_saves.sql`
+3. `20260810224500_protect_campaign_creation.sql`
 
-A migration cria:
+A primeira cria o MVP. As seguintes são aditivas e endurecem segurança/concorrência.
 
-- `campaigns`: campanhas e código de convite
-- `campaign_members`: Biel e Julia vinculados à mesma campanha
-- `campaign_state`: snapshot JSON com todo o estado do jogo
-- RLS: somente membros da campanha podem ler e alterar o save
-- Realtime: alterações no save aparecem nos outros aparelhos
+## Schema
 
-Cada campanha aceita no máximo dois usuários.
+### `campaigns`
 
-## 2. Variáveis na Vercel
+- uma linha por campanha;
+- `owner_id` referencia `auth.users`;
+- `join_code` único;
+- nome limitado a 1-100 caracteres;
+- owner pode atualizar/apagar;
+- INSERT exige `owner_id = auth.uid()` e quota de até 20 campanhas por owner.
 
-No projeto `soberba-lol`, adicione para Production e Preview:
+### `campaign_members`
+
+- chave composta `(campaign_id, user_id)`;
+- papéis `owner` e `player`;
+- leitura somente para membros;
+- entrada do segundo jogador via RPC `join_campaign`;
+- o RPC bloqueia a campanha durante contagem para impedir corrida que criaria um terceiro membro.
+
+### `campaign_state`
+
+- uma linha por campanha;
+- `state jsonb` precisa ser objeto;
+- `revision bigint` controla concorrência;
+- leitura somente por membros;
+- cliente não recebe UPDATE direto;
+- escrita ocorre via RPC `save_campaign_state`.
+
+## Concorrência
+
+O cliente envia:
 
 ```text
-VITE_SUPABASE_URL=https://xjbkvifjslllqdkwkymv.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=<chave pública do projeto>
+campaign_id
+expected_revision
+state
 ```
 
-Se o painel mostrar apenas a chave `anon` legada, também funciona usando:
+O RPC atualiza apenas se a revisão no banco ainda for a esperada. Em sucesso, incrementa `revision`. Se outro aparelho salvou primeiro, o RPC retorna `SAVE_CONFLICT` e o cliente mostra conflito em vez de sobrescrever silenciosamente.
 
-```text
-VITE_SUPABASE_ANON_KEY=<anon key>
-```
+As gravações do mesmo aparelho também são serializadas no frontend para evitar conflitos falsos entre dois autosaves locais em voo.
 
-Nunca use `service_role` no navegador.
+Realtime continua propagando updates de `campaign_state`. Uma atualização remota recebida enquanto existem alterações locais pendentes é tratada como conflito e não como overwrite automático.
 
-Depois das variáveis, faça Redeploy.
+## RLS
 
-## 3. Fluxo do jogo
+Matriz esperada:
 
-1. Biel cria uma conta.
-2. Biel cria uma campanha, por exemplo `Teste do sistema`.
-3. O jogo mostra um código de 8 caracteres.
-4. Julia cria a conta dela e entra usando esse código.
-5. Os dois abrem a mesma campanha.
-6. Personagens, chat, XP, mapa e progressão são salvos automaticamente.
-7. Abrir a campanha em outro celular ou PC carrega o mesmo estado.
+| Tabela | SELECT | INSERT | UPDATE | DELETE |
+|---|---|---|---|---|
+| `campaigns` | membros | owner + quota | owner | owner |
+| `campaign_members` | membros | somente via fluxo privilegiado/RPC | sem escrita direta | sem escrita direta |
+| `campaign_state` | membros | bootstrap interno | somente RPC CAS | sem escrita direta |
 
-Existe também um botão de save manual no cabeçalho.
+As migrations não devem usar `USING (true)` nem `WITH CHECK (true)`. `supabase/migrations.test.js` trava esses invariantes no CI.
 
-## 4. Observação de concorrência
+## Auth e endpoint do Mestre
 
-Este MVP usa um snapshot compartilhado com estratégia `last write wins`. Para dois jogadores tomando decisões em sequência funciona bem. Evitem enviar duas ações exatamente no mesmo instante. Uma versão futura pode migrar mensagens e ações para um log transacional sem mudar a experiência dos jogadores.
+No modo cloud, `/api/mestre` exige:
+
+1. sessão Supabase válida;
+2. `campaignId` UUID válido;
+3. membership confirmado por `is_campaign_member` sob o token do usuário.
+
+Uma conta autenticada que não pertence à campanha deve receber 403 antes de qualquer chamada ao provider de IA.
+
+## Realtime
+
+`campaign_state` usa `REPLICA IDENTITY FULL` e entra na publication `supabase_realtime` na migration base.
+
+## Modo local
+
+O modo local é independente do Supabase e existe como contingência/desenvolvimento. Em produção cloud ele só aparece se `VITE_ENABLE_LOCAL_GUEST=true`. O backend também só aceita chamadas sem Bearer se `MESTRE_ALLOW_GUEST=true`.
+
+Essas duas flags devem permanecer ausentes/false na produção cloud.
+
+## Validação obrigatória antes do merge
+
+Após aplicar migrations no Supabase real:
+
+- listar tabelas e policies;
+- executar Security Advisor;
+- executar Performance Advisor;
+- criar duas contas de teste;
+- confirmar que uma terceira não entra numa campanha cheia;
+- confirmar isolamento entre campanhas;
+- testar CAS de save em dois aparelhos;
+- testar Realtime;
+- testar recuperação de senha e redirects.
+
+Veja [`PRODUCTION-RUNBOOK.md`](PRODUCTION-RUNBOOK.md).
