@@ -1,42 +1,31 @@
--- Limita criação de campanhas e remove INSERT direto do cliente.
+-- Limita criação de campanhas mantendo o fluxo simples do frontend.
 
-create or replace function public.create_campaign(p_name text)
-returns public.campaigns
-language plpgsql
+create or replace function public.can_create_campaign()
+returns boolean
+language sql
+stable
 security definer
 set search_path = pg_catalog, public
 as $$
-declare
-  v_name text;
-  v_count integer;
-  v_campaign public.campaigns%rowtype;
-begin
-  if auth.uid() is null then
-    raise exception 'Usuário não autenticado' using errcode = '42501';
-  end if;
-
-  v_name := btrim(coalesce(p_name, ''));
-  if char_length(v_name) not between 1 and 100 then
-    raise exception 'Nome da campanha inválido' using errcode = '22023';
-  end if;
-
-  select count(*) into v_count
-  from public.campaigns
-  where owner_id = auth.uid();
-
-  if v_count >= 20 then
-    raise exception 'Limite de campanhas atingido' using errcode = '54000';
-  end if;
-
-  insert into public.campaigns (name, owner_id)
-  values (v_name, auth.uid())
-  returning * into v_campaign;
-
-  return v_campaign;
-end;
+  select auth.uid() is not null
+    and (
+      select count(*)
+      from public.campaigns
+      where owner_id = auth.uid()
+    ) < 20;
 $$;
 
-revoke all on function public.create_campaign(text) from public;
-grant execute on function public.create_campaign(text) to authenticated;
+revoke all on function public.can_create_campaign() from public;
+grant execute on function public.can_create_campaign() to authenticated;
 
-revoke insert on public.campaigns from authenticated;
+drop policy if exists "users can create their campaigns" on public.campaigns;
+create policy "users can create their campaigns"
+on public.campaigns for insert
+to authenticated
+with check (
+  owner_id = auth.uid()
+  and char_length(name) between 1 and 100
+  and public.can_create_campaign()
+);
+
+grant insert on public.campaigns to authenticated;
