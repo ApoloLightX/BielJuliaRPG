@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  Gamepad2,
   KeyRound,
   LogIn,
   LogOut,
@@ -8,6 +9,7 @@ import {
   Skull,
   UserPlus,
 } from "lucide-react";
+import App from "./App.jsx";
 import GameSession from "./GameSession.jsx";
 import { supabase, supabaseConfigured } from "./lib/supabase.js";
 
@@ -27,23 +29,26 @@ function LoadingScreen({ text = "Abrindo o grimório..." }) {
   );
 }
 
-function ConfigScreen() {
+function ConfigScreen({ onGuest }) {
   return (
     <div className={`${shell} flex items-center justify-center p-6`}>
       <div className={`${card} max-w-lg w-full space-y-4`}>
         <Skull className="text-[#b8492f]" />
         <div>
-          <h1 className="text-xl font-semibold">Supabase ainda não conectado</h1>
+          <h1 className="text-xl font-semibold">Nuvem ainda não conectada</h1>
           <p className="text-sm text-[#9a887a] mt-2 leading-relaxed">
-            O jogo já conhece o projeto xjbkvifjslllqdkwkymv. Falta adicionar na Vercel a variável pública VITE_SUPABASE_PUBLISHABLE_KEY, ou VITE_SUPABASE_ANON_KEY se estiver usando a chave legada.
+            Você ainda pode jogar agora. O modo local salva automaticamente neste aparelho e permite copiar um código para continuar em outro dispositivo.
           </p>
         </div>
+        <button onClick={onGuest} className={`${primary} w-full flex items-center justify-center gap-2`}>
+          <Gamepad2 size={16} /> Jogar agora neste aparelho
+        </button>
       </div>
     </div>
   );
 }
 
-function AuthScreen() {
+function AuthScreen({ onGuest }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -61,9 +66,7 @@ function AuthScreen() {
       if (mode === "signup") {
         const { data, error: authError } = await supabase.auth.signUp({ email, password });
         if (authError) throw authError;
-        if (!data.session) {
-          setMessage("Conta criada. Confira seu e-mail para confirmar o cadastro e depois faça login.");
-        }
+        if (!data.session) setMessage("Conta criada. Confira seu e-mail para confirmar o cadastro e depois faça login.");
       } else {
         const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
         if (authError) throw authError;
@@ -107,6 +110,16 @@ function AuthScreen() {
         >
           {mode === "login" ? "Ainda não tenho conta" : "Já tenho conta"}
         </button>
+
+        <div className={`${card} space-y-2 border-[#4a3027]`}>
+          <p className="text-sm text-[#c7b6aa]">Quer jogar hoje sem esperar a nuvem?</p>
+          <p className="text-xs text-[#806f64] leading-relaxed">
+            O modo local salva automaticamente. Você pode copiar o código do save e colar no celular, PC ou aparelho da Julia.
+          </p>
+          <button onClick={onGuest} className="w-full border border-[#6b392d] hover:border-[#9a4b39] text-[#d8c6b9] rounded px-4 py-2.5 flex items-center justify-center gap-2 transition-colors">
+            <Gamepad2 size={16} /> Jogar agora neste aparelho
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -223,11 +236,7 @@ function CampaignHub({ user, onOpen }) {
             <div className={`${card} text-sm text-[#837267]`}>Nenhuma campanha ainda.</div>
           ) : (
             campaigns.map((campaign) => (
-              <button
-                key={campaign.id}
-                onClick={() => onOpen(campaign)}
-                className={`${card} w-full text-left hover:border-[#6b392d] transition-colors`}
-              >
+              <button key={campaign.id} onClick={() => onOpen(campaign)} className={`${card} w-full text-left hover:border-[#6b392d] transition-colors`}>
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="font-semibold text-[#e8ddd0]">{campaign.name}</p>
@@ -248,6 +257,7 @@ export default function Root() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [campaign, setCampaign] = useState(null);
+  const [guestMode, setGuestMode] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -264,9 +274,10 @@ export default function Root() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  if (!supabaseConfigured) return <ConfigScreen />;
+  if (guestMode) return <App onExit={() => setGuestMode(false)} />;
+  if (!supabaseConfigured) return <ConfigScreen onGuest={() => setGuestMode(true)} />;
   if (loading) return <LoadingScreen />;
-  if (!session) return <AuthScreen />;
+  if (!session) return <AuthScreen onGuest={() => setGuestMode(true)} />;
   if (!campaign) return <CampaignHub user={session.user} onOpen={setCampaign} />;
 
   return (
