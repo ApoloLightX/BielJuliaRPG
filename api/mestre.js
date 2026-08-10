@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { CAMPAIGN_LORE } from "./lore.js";
+import { CAMPAIGN_LORE } from "../server/lore.js";
 import {
   DEFAULT_SUPABASE_PUBLISHABLE_KEY,
   DEFAULT_SUPABASE_URL,
