@@ -17,31 +17,14 @@ import DiceRoller from "./components/DiceRoller.jsx";
 import LevelUpModal from "./components/LevelUpModal.jsx";
 import CampaignMap from "./components/CampaignMap.jsx";
 import { XP_PER_LEVEL } from "./data/archetypes.js";
+import {
+  applyXpAwards,
+  GAME_SCHEMA_VERSION,
+  initPlayer,
+  parseDirectives,
+  sanitizeSnapshot,
+} from "./game/engine.js";
 import { supabase } from "./lib/supabase.js";
-
-function initPlayer(character) {
-  return {
-    ...character,
-    level: 1,
-    xp: 0,
-    skills: character.archetype.skills.map((s) => ({ ...s, level: 1 })),
-  };
-}
-
-function parseDirectives(text) {
-  const testMatches = [...text.matchAll(/\[\[TESTE:\s*([^\]]+)\]\]/g)].map((m) => m[1].trim());
-  const xpMatches = [...text.matchAll(/\[\[XP:\s*([^|]+)\|\s*(\d+)\]\]/g)].map((m) => ({
-    nick: m[1].trim(),
-    amount: parseInt(m[2], 10),
-  }));
-  const mapMatches = [...text.matchAll(/\[\[MAPA:\s*([^\]]+)\]\]/g)].map((m) => m[1].trim());
-  const cleanText = text
-    .replace(/\[\[TESTE:[^\]]+\]\]/g, "")
-    .replace(/\[\[XP:[^\]]+\]\]/g, "")
-    .replace(/\[\[MAPA:[^\]]+\]\]/g, "")
-    .trim();
-  return { cleanText, testMatches, xpMatches, mapMatches };
-}
 
 export default function GameSession({ campaign, userId, onExit }) {
   const [phase, setPhase] = useState("create-p1");
@@ -61,10 +44,12 @@ export default function GameSession({ campaign, userId, onExit }) {
   const scrollRef = useRef(null);
   const saveTimerRef = useRef(null);
   const suppressSaveUntilRef = useRef(0);
+  const revisionRef = useRef(0);
+  const dirtyRef = useRef(false);
 
   function snapshot() {
-    return {
-      schemaVersion: 1,
+    return sanitizeSnapshot({
+      schemaVersion: GAME_SCHEMA_VERSION,
       phase,
       players,
       messages,
@@ -73,40 +58,45 @@ export default function GameSession({ campaign, userId, onExit }) {
       revealedRegions,
       currentRegion,
       view,
-    };
+    });
   }
 
   function applySnapshot(state) {
-    if (!state || typeof state !== "object") return;
-    setPhase(state.phase || "create-p1");
-    setPlayers(Array.isArray(state.players) ? state.players : [null, null]);
-    setMessages(Array.isArray(state.messages) ? state.messages : []);
-    setPendingTests(Array.isArray(state.pendingTests) ? state.pendingTests : []);
-    setLevelUpQueue(Array.isArray(state.levelUpQueue) ? state.levelUpQueue : []);
-    setRevealedRegions(Array.isArray(state.revealedRegions) ? state.revealedRegions : []);
-    setCurrentRegion(state.currentRegion || null);
-    setView(state.view === "map" ? "map" : "chat");
+    const safe = sanitizeSnapshot(state);
+    setPhase(safe.phase);
+    setPlayers(safe.players);
+    setMessages(safe.messages);
+    setPendingTests(safe.pendingTests);
+    setLevelUpQueue(safe.levelUpQueue);
+    setRevealedRegions(safe.revealedRegions);
+    setCurrentRegion(safe.currentRegion);
+    setView(safe.view);
   }
 
   async function persistSnapshot(nextState = snapshot(), quiet = false) {
     if (!hydrated) return true;
     if (!quiet) setSaveStatus("salvando");
 
-    const { error: saveError } = await supabase
-      .from("campaign_state")
-      .update({
-        state: nextState,
-        updated_by: userId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("campaign_id", campaign.id);
+    const { data, error: saveError } = await supabase.rpc("save_campaign_state", {
+      p_campaign_id: campaign.id,
+      p_expected_revision: revisionRef.current,
+      p_state: nextState,
+    });
 
     if (saveError) {
-      setSaveStatus("erro ao salvar");
-      setError(`Falha no save: ${saveError.message}`);
+      const conflict = /SAVE_CONFLICT|40001/i.test(`${saveError.message || ""} ${saveError.code || ""}`);
+      setSaveStatus(conflict ? "conflito" : "erro ao salvar");
+      setError(
+        conflict
+          ? "A Julia ou outro aparelho salvou esta campanha antes. Volte às campanhas e abra novamente para sincronizar antes de continuar."
+          : `Falha no save: ${saveError.message}`
+      );
       return false;
     }
 
+    const row = Array.isArray(data) ? data[0] : data;
+    revisionRef.current = Number(row?.new_revision ?? revisionRef.current + 1);
+    dirtyRef.current = false;
     setSaveStatus("salvo");
     return true;
   }
@@ -119,16 +109,24 @@ export default function GameSession({ campaign, userId, onExit }) {
     async function loadState() {
       const { data, error: loadError } = await supabase
         .from("campaign_state")
-        .select("state,updated_at,updated_by")
+        .select("state,updated_at,updated_by,revision")
         .eq("campaign_id", campaign.id)
         .single();
 
       if (!active) return;
       if (loadError) {
         setError(`Não foi possível carregar o save: ${loadError.message}`);
-      } else if (data?.state && Object.keys(data.state).length > 0) {
-        applySnapshot(data.state);
+      } else {
+        revisionRef.current = Number(data?.revision || 0);
+        if (data?.state && Object.keys(data.state).length > 0) {
+          try {
+            applySnapshot(data.state);
+          } catch {
+            setError("O save remoto está corrompido e não foi carregado.");
+          }
+        }
       }
+      dirtyRef.current = false;
       setHydrated(true);
       setSaveStatus("salvo");
     }
@@ -147,12 +145,26 @@ export default function GameSession({ campaign, userId, onExit }) {
         },
         (payload) => {
           if (!active || payload.new?.updated_by === userId) return;
-          suppressSaveUntilRef.current = Date.now() + 1200;
-          applySnapshot(payload.new?.state || {});
-          setSaveStatus("sincronizado");
+          if (dirtyRef.current) {
+            setSaveStatus("conflito");
+            setError("Outro aparelho atualizou a campanha enquanto você tinha mudanças locais. Reabra a campanha para escolher a versão mais recente sem sobrescrever silenciosamente.");
+            return;
+          }
+          try {
+            suppressSaveUntilRef.current = Date.now() + 1200;
+            revisionRef.current = Number(payload.new?.revision || revisionRef.current);
+            applySnapshot(payload.new?.state || {});
+            setSaveStatus("sincronizado");
+          } catch {
+            setError("Foi recebida uma atualização remota inválida.");
+          }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setSaveStatus("realtime indisponível");
+        }
+      });
 
     return () => {
       active = false;
@@ -165,10 +177,18 @@ export default function GameSession({ campaign, userId, onExit }) {
     if (!hydrated || Date.now() < suppressSaveUntilRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
+    dirtyRef.current = true;
     setSaveStatus("salvando");
-    const nextState = snapshot();
-    saveTimerRef.current = setTimeout(() => persistSnapshot(nextState, true), 650);
+    let nextState;
+    try {
+      nextState = snapshot();
+    } catch {
+      setSaveStatus("erro ao salvar");
+      setError("O estado atual da campanha é inválido e não será salvo.");
+      return;
+    }
 
+    saveTimerRef.current = setTimeout(() => persistSnapshot(nextState, true), 650);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
@@ -184,45 +204,51 @@ export default function GameSession({ campaign, userId, onExit }) {
   }
 
   function handleP2Confirm(character) {
-    setPlayers((prev) => [prev[0], initPlayer(character)]);
+    const nextPlayer = initPlayer(character);
+    if (players[0]?.nick.toLocaleLowerCase() === nextPlayer.nick.toLocaleLowerCase()) {
+      setError("Os dois personagens precisam de nomes diferentes para os testes e recompensas funcionarem corretamente.");
+      return;
+    }
+    setPlayers((prev) => [prev[0], nextPlayer]);
     setPhase("game");
   }
 
-  function applyXp(nick, amount) {
-    setPlayers((prev) =>
-      prev.map((p) => {
-        if (!p || p.nick !== nick) return p;
-        const newXp = p.xp + amount;
-        const newLevel = Math.floor(newXp / XP_PER_LEVEL) + 1;
-        if (newLevel > p.level) setLevelUpQueue((q) => [...q, p.nick]);
-        return { ...p, xp: newXp, level: newLevel };
-      })
-    );
-  }
-
   async function sendMessage(text) {
-    if (!text.trim() || loading) return;
+    if (!text.trim() || loading || saveStatus === "conflito") return;
     setError("");
-    const newMessages = [...messages, { role: "user", text }];
+    const newMessages = [...messages, { role: "user", text: text.trim().slice(0, 3_000) }];
     setMessages(newMessages);
     setInput("");
     setLoading(true);
     setPendingTests([]);
 
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Sua sessão expirou. Saia e entre novamente.");
+
       const res = await fetch("/api/mestre", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ messages: newMessages, players }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `Erro ${res.status}`);
 
       const { cleanText, testMatches, xpMatches, mapMatches } = parseDirectives(data.reply);
       setMessages((prev) => [...prev, { role: "model", text: cleanText }]);
       if (testMatches.length) setPendingTests(testMatches);
-      xpMatches.forEach(({ nick, amount }) => applyXp(nick, amount));
+      if (xpMatches.length) {
+        const result = applyXpAwards(players, xpMatches);
+        setPlayers(result.players);
+        if (result.levelUps.length) {
+          setLevelUpQueue((queue) => [...queue, ...result.levelUps]);
+        }
+      }
       if (mapMatches.length) {
         setRevealedRegions((prev) => Array.from(new Set([...prev, ...mapMatches])));
         setCurrentRegion(mapMatches[mapMatches.length - 1]);
@@ -237,44 +263,48 @@ export default function GameSession({ campaign, userId, onExit }) {
   }
 
   function handleDiceResult({ nick, attr, roll, modifier, total }) {
-    setPendingTests((prev) => prev.filter((n) => n !== nick));
+    setPendingTests((prev) => prev.filter((name) => name !== nick));
     sendMessage(`${nick} rolou ${attr}: ${roll} + ${modifier} = ${total}`);
   }
 
   function handleLevelChoice(playerIdx, choice) {
     setPlayers((prev) =>
-      prev.map((p, i) => {
-        if (i !== playerIdx) return p;
+      prev.map((player, index) => {
+        if (index !== playerIdx) return player;
         if (choice.type === "improve") {
           return {
-            ...p,
-            skills: p.skills.map((s) => (s.name === choice.skillName ? { ...s, level: s.level + 1 } : s)),
+            ...player,
+            skills: player.skills.map((skill) =>
+              skill.name === choice.skillName ? { ...skill, level: Math.min(20, skill.level + 1) } : skill
+            ),
           };
         }
         if (choice.type === "unlock") {
+          const locked = player.archetype.lockedSkills.find((skill) => skill.name === choice.skill?.name);
+          if (!locked) return player;
           return {
-            ...p,
-            skills: [...p.skills, { ...choice.skill, level: 1 }],
+            ...player,
+            skills: [...player.skills, { ...locked, level: 1 }],
             archetype: {
-              ...p.archetype,
-              lockedSkills: p.archetype.lockedSkills.filter((s) => s.name !== choice.skill.name),
+              ...player.archetype,
+              lockedSkills: player.archetype.lockedSkills.filter((skill) => skill.name !== locked.name),
             },
           };
         }
-        return p;
+        return player;
       })
     );
-    setLevelUpQueue((q) => q.slice(1));
+    setLevelUpQueue((queue) => queue.slice(1));
   }
 
   async function exitToCampaigns() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    await persistSnapshot(snapshot());
-    onExit();
+    const saved = await persistSnapshot(snapshot());
+    if (saved) onExit();
   }
 
   const currentLevelUpNick = levelUpQueue[0];
-  const currentLevelUpIdx = players.findIndex((p) => p?.nick === currentLevelUpNick);
+  const currentLevelUpIdx = players.findIndex((player) => player?.nick === currentLevelUpNick);
 
   if (!hydrated) {
     return (
@@ -309,10 +339,8 @@ export default function GameSession({ campaign, userId, onExit }) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className={`text-[10px] ${saveStatus.includes("erro") ? "text-[#d26b54]" : "text-[#8b7b70]"}`}>
-            {saveStatus}
-          </span>
-          <button onClick={() => persistSnapshot()} className="text-[#9d897c] hover:text-[#e8ddd0]" aria-label="Salvar agora"><Save size={16} /></button>
+          <span className={`text-[10px] ${saveStatus.includes("erro") || saveStatus === "conflito" ? "text-[#d26b54]" : "text-[#8b7b70]"}`}>{saveStatus}</span>
+          <button onClick={() => persistSnapshot()} disabled={saveStatus === "conflito"} className="text-[#9d897c] hover:text-[#e8ddd0] disabled:opacity-40" aria-label="Salvar agora"><Save size={16} /></button>
         </div>
       </header>
 
@@ -331,23 +359,16 @@ export default function GameSession({ campaign, userId, onExit }) {
       {phase === "game" && (
         <>
           <div className="flex gap-2 px-5 py-3 border-b border-[#2a1f1a] bg-[#120e0c]">
-            {players.map((p, i) => {
-              if (!p) return null;
-              const xpInLevel = p.xp % XP_PER_LEVEL;
+            {players.map((player, index) => {
+              if (!player) return null;
+              const xpInLevel = player.xp % XP_PER_LEVEL;
               const pct = Math.min(100, (xpInLevel / XP_PER_LEVEL) * 100);
               return (
-                <div key={i} className="flex items-center gap-2 bg-[#1a1310] border border-[#2a1f1a] rounded px-2 py-1.5 flex-1">
-                  <div className="w-8 h-8 flex-shrink-0">
-                    <CharacterAvatar skinHex={p.skin.hex} hairHex={p.hair.hex} gender={p.archetype.gender} size={32} />
-                  </div>
+                <div key={index} className="flex items-center gap-2 bg-[#1a1310] border border-[#2a1f1a] rounded px-2 py-1.5 flex-1">
+                  <div className="w-8 h-8 flex-shrink-0"><CharacterAvatar skinHex={player.skin.hex} hairHex={player.hair.hex} gender={player.archetype.gender} size={32} /></div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1">
-                      <p className="text-xs font-medium truncate">{p.nick}</p>
-                      <span className="text-[9px] ember flex items-center gap-0.5"><Star size={8} /> {p.level}</span>
-                    </div>
-                    <div className="w-full h-1 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden">
-                      <div className="h-full bg-[#b8492f]" style={{ width: `${pct}%` }} />
-                    </div>
+                    <div className="flex items-center gap-1"><p className="text-xs font-medium truncate">{player.nick}</p><span className="text-[9px] ember flex items-center gap-0.5"><Star size={8} /> {player.level}</span></div>
+                    <div className="w-full h-1 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden"><div className="h-full bg-[#b8492f]" style={{ width: `${pct}%` }} /></div>
                   </div>
                 </div>
               );
@@ -360,62 +381,21 @@ export default function GameSession({ campaign, userId, onExit }) {
           </div>
 
           {view === "map" ? (
-            <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise">
-              <CampaignMap revealedIds={revealedRegions} currentId={currentRegion} />
-            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise"><CampaignMap revealedIds={revealedRegions} currentId={currentRegion} /></div>
           ) : (
             <>
               <main ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6 space-y-5 bg-noise">
-                {messages.length === 0 && (
-                  <div className="text-center py-16 space-y-3">
-                    <Flame size={28} className="ember mx-auto opacity-60" />
-                    <p className="text-[#8a7a6d] text-sm max-w-sm mx-auto leading-relaxed">Os personagens estão prontos. Escreva "vamos começar" para o mestre abrir a campanha.</p>
-                  </div>
-                )}
-
-                {messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[85%] rounded px-4 py-3 text-[15px] leading-relaxed whitespace-pre-wrap ${m.role === "user" ? "bg-[#2a1f1a]" : "bg-[#1a1310] border border-[#2a1f1a] text-[#d9cbb8]"}`}>
-                      {m.role === "model" && <div className="flex items-center gap-2 mb-1.5 text-xs ember tracking-wider uppercase font-display"><ScrollText size={12} /> Mestre</div>}
-                      {m.text}
-                    </div>
-                  </div>
-                ))}
-
+                {messages.length === 0 && <div className="text-center py-16 space-y-3"><Flame size={28} className="ember mx-auto opacity-60" /><p className="text-[#8a7a6d] text-sm max-w-sm mx-auto leading-relaxed">Os personagens estão prontos. Escreva "vamos começar" para o mestre abrir a campanha.</p></div>}
+                {messages.map((message, index) => <div key={index} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}><div className={`max-w-[85%] rounded px-4 py-3 text-[15px] leading-relaxed whitespace-pre-wrap ${message.role === "user" ? "bg-[#2a1f1a]" : "bg-[#1a1310] border border-[#2a1f1a] text-[#d9cbb8]"}`}>{message.role === "model" && <div className="flex items-center gap-2 mb-1.5 text-xs ember tracking-wider uppercase font-display"><ScrollText size={12} /> Mestre</div>}{message.text}</div></div>)}
                 {loading && <div className="flex justify-start"><div className="bg-[#1a1310] border border-[#2a1f1a] rounded px-4 py-3 text-sm text-[#8a7a6d] italic">O mestre está tecendo o destino de vocês...</div></div>}
                 {error && <div className="text-center"><p className="text-xs text-[#d26b54] bg-[#1a1310] inline-block px-3 py-2 rounded border border-[#3a2419]">{error}</p></div>}
-
-                {pendingTests.map((nick) => {
-                  const p = players.find((pl) => pl?.nick === nick);
-                  if (!p) return null;
-                  return <DiceRoller key={nick} player={p} onRoll={handleDiceResult} />;
-                })}
+                {pendingTests.map((nick) => { const player = players.find((candidate) => candidate?.nick === nick); return player ? <DiceRoller key={nick} player={player} onRoll={handleDiceResult} /> : null; })}
               </main>
-
-              <footer className="border-t border-[#2a1f1a] bg-[#120e0c] px-5 py-4">
-                <div className="flex gap-2 items-end">
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMessage(input);
-                      }
-                    }}
-                    placeholder="O que vocês fazem?"
-                    rows={1}
-                    className="flex-1 bg-[#0e0b0a] border border-[#3a2a24] rounded px-3 py-2.5 text-sm placeholder-[#5a4d43] focus:outline-none focus:border-[#b8492f] resize-none"
-                  />
-                  <button onClick={() => sendMessage(input)} disabled={loading || !input.trim()} className="bg-[#7a2419] hover:bg-[#8e2c1f] disabled:opacity-40 text-[#f0e6da] p-2.5 rounded" aria-label="Enviar"><Send size={18} /></button>
-                </div>
-              </footer>
+              <footer className="border-t border-[#2a1f1a] bg-[#120e0c] px-5 py-4"><div className="flex gap-2 items-end"><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(input); } }} placeholder="O que vocês fazem?" rows={1} maxLength={3000} className="flex-1 bg-[#0e0b0a] border border-[#3a2a24] rounded px-3 py-2.5 text-sm placeholder-[#5a4d43] focus:outline-none focus:border-[#b8492f] resize-none" /><button onClick={() => sendMessage(input)} disabled={loading || !input.trim() || saveStatus === "conflito"} className="bg-[#7a2419] hover:bg-[#8e2c1f] disabled:opacity-40 text-[#f0e6da] p-2.5 rounded" aria-label="Enviar"><Send size={18} /></button></div></footer>
             </>
           )}
 
-          {currentLevelUpIdx >= 0 && (
-            <LevelUpModal player={players[currentLevelUpIdx]} onChoose={(choice) => handleLevelChoice(currentLevelUpIdx, choice)} />
-          )}
+          {currentLevelUpIdx >= 0 && <LevelUpModal player={players[currentLevelUpIdx]} onChoose={(choice) => handleLevelChoice(currentLevelUpIdx, choice)} />}
         </>
       )}
     </div>
