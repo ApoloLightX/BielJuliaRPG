@@ -45,6 +45,9 @@ Esta auditoria compara a branch de hardening com a `main` e registra apenas esta
 | BRANCH-023 | P3 | GitHub | branch protection não pôde ser inspecionada pelo token da integração | endpoint respondeu 403 | pendente por dependência externa |
 | VERCEL-024 | P2 | Infra | logs/runtime/env não puderam ser inspecionados diretamente | preview validado por check Vercel do GitHub; conector direto indisponível | pendente por dependência externa |
 | SUPABASE-025 | P1 | Infra | tabelas/RLS/advisors reais não puderam ser reconsultados | último acesso anterior mostrou schema público vazio; conector depois foi desativado | pendente por dependência externa |
+| VERCEL-026 | P2 | Vercel/Segurança | `api/lore.js` estava sob `/api` e podia ser tratado como Function pela Vercel | lore movida para `server/lore.js`; `/api` mantém apenas endpoint/teste | corrigido e buildado |
+| LORE-027 | P2 | Produto/Privacidade | o repositório é público e a lore/spoilers continuam legíveis no GitHub e no histórico | não reescrever histórico nem alterar visibilidade sem autorização humana | pendente por decisão humana |
+| CI-028 | P3 | CI | scanner de secrets confundia documentação sobre nomes inseguros com uso real em código | nomes proibidos só bloqueiam source/config; padrões de valores reais continuam verificados em docs | testado |
 
 ## Arquitetura alvo
 
@@ -65,6 +68,9 @@ Browser
   ├─ sanitiza/limita entrada
   ├─ Groq
   └─ Gemini fallback
+
+server/lore.js
+  └─ módulo server-side; fora do diretório de Functions
 
 Supabase
   campaigns
@@ -101,23 +107,36 @@ Nenhuma `service_role` é necessária no browser ou no backend atual.
 
 ## Checks executados
 
-Pipeline final em Node 24:
+Pipeline em Node 24, reproduzido após as correções de código:
 
 ```text
-npm ci                    PASS
-npm run security:secrets PASS
-npm run lint              PASS
-npm run typecheck         PASS
-npm test                  PASS (3 arquivos, 16 testes)
-npm run build             PASS
-npm audit --audit-level=high PASS (0 vulnerabilidades)
+npm ci                         PASS
+npm run security:secrets      PASS
+npm run lint                   PASS
+npm run typecheck              PASS
+npm test                       PASS (3 arquivos, 16 testes)
+npm run build                  PASS
+npm audit --audit-level=high   PASS (0 vulnerabilidades)
 ```
 
-Build Vite 8 final auditado:
+Build Vite 8 auditado:
 
 - chunk principal: ~359 kB, ~103 kB gzip;
 - App local e GameSession são lazy-loaded;
 - `App`, `GameSession` e engine são chunks separados.
+
+## Segunda auditoria
+
+A segunda leitura encontrou e tratou problemas que não estavam no primeiro passe:
+
+- autorização do Mestre vinculada ao `campaignId`, não apenas ao login;
+- serialização de saves do mesmo aparelho;
+- quota de criação de campanhas por RLS;
+- recuperação de senha e redirects explícitos;
+- atualização das GitHub Actions para geração Node 24;
+- scanner de secrets com distinção entre documentação e uso inseguro;
+- utilitário de lore removido de `/api` para não virar rota/função acidental;
+- lacuna de confidencialidade narrativa causada pelo repositório público registrada como decisão humana.
 
 ## O que NÃO está confirmado
 
@@ -126,6 +145,8 @@ Build Vite 8 final auditado:
 3. Site URL e redirect URLs do Supabase Auth não puderam ser conferidos.
 4. Valores reais de env vars Production/Preview da Vercel não puderam ser lidos.
 5. Runtime logs e erro clusters Vercel não puderam ser lidos.
-6. O check Vercel do commit auditado passou, mas isso valida build/deploy, não o fluxo autenticado contra o banco real.
+6. O check Vercel do commit auditado valida build/deploy, não o fluxo autenticado contra o banco real.
+7. Branch protection não pôde ser lida pelo token da integração.
+8. A lore ainda é pública por causa da visibilidade e histórico do repositório.
 
 Por esses motivos, a branch não deve ser mesclada em `main` antes de executar o runbook de produção.
