@@ -5,12 +5,7 @@ const SELF = "scripts/check-secrets.mjs";
 const files = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })
   .split("\0")
   .filter(Boolean)
-  .filter(
-    (file) =>
-      file !== SELF &&
-      !file.startsWith("docs/") &&
-      !file.endsWith("package-lock.json")
-  );
+  .filter((file) => file !== SELF && !file.endsWith("package-lock.json"));
 
 const forbiddenNames = [
   "VITE_GROQ_API_KEY",
@@ -36,8 +31,16 @@ for (const file of files) {
     continue;
   }
 
-  for (const name of forbiddenNames) {
-    if (content.includes(name)) findings.push(`${file}: forbidden client/service secret name ${name}`);
+  const documentation = file === "README.md" || file.startsWith("docs/");
+
+  // Documentation may explain names that must never be used in code/config.
+  // Actual secret-looking values are still scanned in documentation below.
+  if (!documentation) {
+    for (const name of forbiddenNames) {
+      if (content.includes(name)) {
+        findings.push(`${file}: forbidden client/service secret name ${name}`);
+      }
+    }
   }
 
   for (const pattern of secretPatterns) {
@@ -45,7 +48,7 @@ for (const file of files) {
     pattern.regex.lastIndex = 0;
   }
 
-  if (file !== ".env.example") {
+  if (!documentation && file !== ".env.example") {
     for (const variable of ["GROQ_API_KEY", "GEMINI_API_KEY"]) {
       const assignment = new RegExp(`${variable}\\s*=\\s*[^\\s'";]+`, "g");
       if (assignment.test(content)) findings.push(`${file}: literal assignment to ${variable}`);
