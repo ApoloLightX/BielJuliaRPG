@@ -1,11 +1,14 @@
 # Checklist para jogar hoje
 
+Este checklist é o último passo antes da sessão.
+
 ## Repositório
 
 - [ ] `src/` presente
 - [ ] `api/mestre.js` presente
 - [ ] `api/lore.js` presente
 - [ ] `package.json` presente
+- [ ] `package-lock.json` presente
 - [ ] `.env` real NÃO commitado
 
 ## Vercel
