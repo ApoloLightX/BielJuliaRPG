@@ -1,16 +1,16 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ClipboardCopy,
-  Upload,
+  Flame,
+  Map as MapIcon,
+  MessageSquare,
   RotateCcw,
   ScrollText,
   Send,
   Skull,
-  Flame,
   Star,
-  Map as MapIcon,
-  MessageSquare,
+  Upload,
 } from "lucide-react";
 import CharacterCreator from "./components/CharacterCreator.jsx";
 import CharacterAvatar from "./components/CharacterAvatar.jsx";
@@ -18,46 +18,32 @@ import DiceRoller from "./components/DiceRoller.jsx";
 import LevelUpModal from "./components/LevelUpModal.jsx";
 import CampaignMap from "./components/CampaignMap.jsx";
 import { XP_PER_LEVEL } from "./data/archetypes.js";
+import {
+  applyXpAwards,
+  GAME_SCHEMA_VERSION,
+  initPlayer,
+  parseDirectives,
+  sanitizeSnapshot,
+} from "./game/engine.js";
 
 const STORAGE_KEY = "biel-julia-rpg-local-v1";
-
-function initPlayer(character) {
-  return {
-    ...character,
-    level: 1,
-    xp: 0,
-    skills: character.archetype.skills.map((s) => ({ ...s, level: 1 })),
-  };
-}
-
-function parseDirectives(text) {
-  const testMatches = [...text.matchAll(/\[\[TESTE:\s*([^\]]+)\]\]/g)].map((m) => m[1].trim());
-  const xpMatches = [...text.matchAll(/\[\[XP:\s*([^|]+)\|\s*(\d+)\]\]/g)].map((m) => ({
-    nick: m[1].trim(),
-    amount: parseInt(m[2], 10),
-  }));
-  const mapMatches = [...text.matchAll(/\[\[MAPA:\s*([^\]]+)\]\]/g)].map((m) => m[1].trim());
-  const cleanText = text
-    .replace(/\[\[TESTE:[^\]]+\]\]/g, "")
-    .replace(/\[\[XP:[^\]]+\]\]/g, "")
-    .replace(/\[\[MAPA:[^\]]+\]\]/g, "")
-    .trim();
-  return { cleanText, testMatches, xpMatches, mapMatches };
-}
 
 function encodeSave(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
   }
   return btoa(binary);
 }
 
 function decodeSave(code) {
+  if (typeof code !== "string" || code.length > 2_000_000) {
+    throw new Error("Save inválido");
+  }
   const binary = atob(code.trim());
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes));
+  return sanitizeSnapshot(JSON.parse(new TextDecoder().decode(bytes)));
 }
 
 function App({ onExit }) {
@@ -76,32 +62,33 @@ function App({ onExit }) {
   const [saveStatus, setSaveStatus] = useState("carregando");
   const scrollRef = useRef(null);
 
-  function snapshot() {
-    return {
-      schemaVersion: 1,
-      phase,
-      players,
-      messages,
-      pendingTests,
-      levelUpQueue,
-      revealedRegions,
-      currentRegion,
-      view,
-      savedAt: new Date().toISOString(),
-    };
-  }
+  const currentSnapshot = useMemo(
+    () =>
+      sanitizeSnapshot({
+        schemaVersion: GAME_SCHEMA_VERSION,
+        phase,
+        players,
+        messages,
+        pendingTests,
+        levelUpQueue,
+        revealedRegions,
+        currentRegion,
+        view,
+      }),
+    [phase, players, messages, pendingTests, levelUpQueue, revealedRegions, currentRegion, view]
+  );
 
-  function applySnapshot(state) {
-    if (!state || typeof state !== "object") throw new Error("Save inválido");
-    setPhase(state.phase || "create-p1");
-    setPlayers(Array.isArray(state.players) ? state.players : [null, null]);
-    setMessages(Array.isArray(state.messages) ? state.messages : []);
-    setPendingTests(Array.isArray(state.pendingTests) ? state.pendingTests : []);
-    setLevelUpQueue(Array.isArray(state.levelUpQueue) ? state.levelUpQueue : []);
-    setRevealedRegions(Array.isArray(state.revealedRegions) ? state.revealedRegions : []);
-    setCurrentRegion(state.currentRegion || null);
-    setView(state.view === "map" ? "map" : "chat");
-  }
+  const applySnapshot = useCallback((state) => {
+    const safe = sanitizeSnapshot(state);
+    setPhase(safe.phase);
+    setPlayers(safe.players);
+    setMessages(safe.messages);
+    setPendingTests(safe.pendingTests);
+    setLevelUpQueue(safe.levelUpQueue);
+    setRevealedRegions(safe.revealedRegions);
+    setCurrentRegion(safe.currentRegion);
+    setView(safe.view);
+  }, []);
 
   useEffect(() => {
     try {
@@ -112,28 +99,30 @@ function App({ onExit }) {
       } else {
         setSaveStatus("novo");
       }
-    } catch (err) {
-      console.error("Falha ao restaurar save local", err);
+    } catch (error) {
+      console.error("Falha ao restaurar save local", error);
+      localStorage.removeItem(STORAGE_KEY);
       setSaveStatus("novo");
+      setError("O save local estava inválido e foi ignorado para proteger a campanha.");
     } finally {
       setHydrated(true);
     }
-  }, []);
+  }, [applySnapshot]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated) return undefined;
     setSaveStatus("salvando");
     const timer = setTimeout(() => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot()));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(currentSnapshot));
         setSaveStatus("salvo");
-      } catch (err) {
-        console.error("Falha ao salvar localmente", err);
+      } catch (error) {
+        console.error("Falha ao salvar localmente", error);
         setSaveStatus("erro no save");
       }
     }, 350);
     return () => clearTimeout(timer);
-  }, [phase, players, messages, pendingTests, levelUpQueue, revealedRegions, currentRegion, view, hydrated]);
+  }, [currentSnapshot, hydrated]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -141,16 +130,16 @@ function App({ onExit }) {
 
   async function exportSave() {
     try {
-      const code = encodeSave(snapshot());
+      const code = encodeSave(currentSnapshot);
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(code);
         setSaveStatus("código copiado");
-        window.alert("Código do save copiado. Envie para a Julia ou para você mesmo no WhatsApp.");
+        window.alert("Código do save copiado. Guarde-o em um local seguro para continuar em outro aparelho.");
       } else {
         window.prompt("Copie este código de save:", code);
       }
-    } catch (err) {
-      setError(`Não foi possível exportar o save: ${err.message}`);
+    } catch (error) {
+      setError(`Não foi possível exportar o save: ${error.message}`);
     }
   }
 
@@ -163,9 +152,9 @@ function App({ onExit }) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       setSaveStatus("save importado");
       setError("");
-      window.alert("Save importado. A campanha foi carregada neste aparelho.");
-    } catch (err) {
-      setError("Código de save inválido ou incompleto.");
+      window.alert("Save importado e validado neste aparelho.");
+    } catch {
+      setError("Código de save inválido, corrompido ou incompatível.");
     }
   }
 
@@ -176,95 +165,110 @@ function App({ onExit }) {
   }
 
   function handleP1Confirm(character) {
-    setPlayers([initPlayer(character), null]);
-    setPhase("create-p2");
+    try {
+      setPlayers([initPlayer(character), null]);
+      setPhase("create-p2");
+      setError("");
+    } catch (error) {
+      setError(error.message);
+    }
   }
 
   function handleP2Confirm(character) {
-    setPlayers((prev) => [prev[0], initPlayer(character)]);
-    setPhase("game");
-  }
-
-  function applyXp(nick, amount) {
-    setPlayers((prev) =>
-      prev.map((p) => {
-        if (!p || p.nick !== nick) return p;
-        const newXp = p.xp + amount;
-        const newLevel = Math.floor(newXp / XP_PER_LEVEL) + 1;
-        if (newLevel > p.level) setLevelUpQueue((q) => [...q, p.nick]);
-        return { ...p, xp: newXp, level: newLevel };
-      })
-    );
+    try {
+      const nextPlayer = initPlayer(character);
+      if (players[0]?.nick.toLocaleLowerCase() === nextPlayer.nick.toLocaleLowerCase()) {
+        setError("Os dois personagens precisam de nomes diferentes para os testes e recompensas funcionarem corretamente.");
+        return;
+      }
+      setPlayers((previous) => [previous[0], nextPlayer]);
+      setPhase("game");
+      setError("");
+    } catch (error) {
+      setError(error.message);
+    }
   }
 
   async function sendMessage(text) {
-    if (!text.trim() || loading) return;
+    const trimmed = text.trim().slice(0, 3_000);
+    if (!trimmed || loading) return;
+
     setError("");
-    const newMessages = [...messages, { role: "user", text }];
+    const newMessages = [...messages, { role: "user", text: trimmed }];
     setMessages(newMessages);
     setInput("");
     setLoading(true);
     setPendingTests([]);
 
     try {
-      const res = await fetch("/api/mestre", {
+      const response = await fetch("/api/mestre", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: newMessages, players }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || `Erro ${res.status}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || `Erro ${response.status}`);
 
       const { cleanText, testMatches, xpMatches, mapMatches } = parseDirectives(data.reply);
-      setMessages((prev) => [...prev, { role: "model", text: cleanText }]);
+      setMessages((previous) => [...previous, { role: "model", text: cleanText }]);
       if (testMatches.length) setPendingTests(testMatches);
-      xpMatches.forEach(({ nick, amount }) => applyXp(nick, amount));
-      if (mapMatches.length) {
-        setRevealedRegions((prev) => Array.from(new Set([...prev, ...mapMatches])));
-        setCurrentRegion(mapMatches[mapMatches.length - 1]);
+      if (xpMatches.length) {
+        const result = applyXpAwards(players, xpMatches);
+        setPlayers(result.players);
+        if (result.levelUps.length) {
+          setLevelUpQueue((queue) => [...queue, ...result.levelUps]);
+        }
       }
-    } catch (err) {
-      setError(err.message || "Algo deu errado ao falar com o mestre.");
-      setMessages((prev) => prev.slice(0, -1));
-      setInput(text);
+      if (mapMatches.length) {
+        setRevealedRegions((previous) => Array.from(new Set([...previous, ...mapMatches])));
+        setCurrentRegion(mapMatches.at(-1));
+      }
+    } catch (requestError) {
+      setError(requestError.message || "Algo deu errado ao falar com o mestre.");
+      setMessages((previous) => previous.slice(0, -1));
+      setInput(trimmed);
     } finally {
       setLoading(false);
     }
   }
 
   function handleDiceResult({ nick, attr, roll, modifier, total }) {
-    setPendingTests((prev) => prev.filter((n) => n !== nick));
+    setPendingTests((previous) => previous.filter((name) => name !== nick));
     sendMessage(`${nick} rolou ${attr}: ${roll} + ${modifier} = ${total}`);
   }
 
   function handleLevelChoice(playerIdx, choice) {
-    setPlayers((prev) =>
-      prev.map((p, i) => {
-        if (i !== playerIdx) return p;
+    setPlayers((previous) =>
+      previous.map((player, index) => {
+        if (index !== playerIdx) return player;
         if (choice.type === "improve") {
           return {
-            ...p,
-            skills: p.skills.map((s) => (s.name === choice.skillName ? { ...s, level: s.level + 1 } : s)),
+            ...player,
+            skills: player.skills.map((skill) =>
+              skill.name === choice.skillName ? { ...skill, level: Math.min(20, skill.level + 1) } : skill
+            ),
           };
         }
         if (choice.type === "unlock") {
+          const locked = player.archetype.lockedSkills.find((skill) => skill.name === choice.skill?.name);
+          if (!locked) return player;
           return {
-            ...p,
-            skills: [...p.skills, { ...choice.skill, level: 1 }],
+            ...player,
+            skills: [...player.skills, { ...locked, level: 1 }],
             archetype: {
-              ...p.archetype,
-              lockedSkills: p.archetype.lockedSkills.filter((s) => s.name !== choice.skill.name),
+              ...player.archetype,
+              lockedSkills: player.archetype.lockedSkills.filter((skill) => skill.name !== locked.name),
             },
           };
         }
-        return p;
+        return player;
       })
     );
-    setLevelUpQueue((q) => q.slice(1));
+    setLevelUpQueue((queue) => queue.slice(1));
   }
 
   const currentLevelUpNick = levelUpQueue[0];
-  const currentLevelUpIdx = players.findIndex((p) => p?.nick === currentLevelUpNick);
+  const currentLevelUpIdx = players.findIndex((player) => player?.nick === currentLevelUpNick);
 
   if (!hydrated) {
     return (
@@ -276,16 +280,6 @@ function App({ onExit }) {
 
   return (
     <div className="min-h-screen w-full bg-[#0e0b0a] text-[#e8ddd0] flex flex-col font-serif">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Crimson+Pro:ital,wght@0,400;0,500;1,400&display=swap');
-        .font-display { font-family: 'Cinzel', serif; }
-        .font-serif { font-family: 'Crimson Pro', serif; }
-        .bg-noise { background-image: radial-gradient(circle at 20% 30%, rgba(139,0,0,0.06), transparent 40%), radial-gradient(circle at 80% 70%, rgba(139,0,0,0.05), transparent 45%); }
-        .ember { color: #b8492f; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-thumb { background: #3a2a24; border-radius: 3px; }
-      `}</style>
-
       <header className="border-b border-[#2a1f1a] bg-[#120e0c] px-3 sm:px-5 py-3 flex items-center justify-between gap-2 bg-noise">
         <div className="flex items-center gap-2 min-w-0">
           {onExit && (
@@ -300,50 +294,28 @@ function App({ onExit }) {
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          <button onClick={exportSave} className="p-2 text-[#a99284] hover:text-[#e8ddd0]" title="Copiar código do save" aria-label="Exportar save">
-            <ClipboardCopy size={16} />
-          </button>
-          <button onClick={importSave} className="p-2 text-[#a99284] hover:text-[#e8ddd0]" title="Importar save" aria-label="Importar save">
-            <Upload size={16} />
-          </button>
-          <button onClick={resetLocalSave} className="p-2 text-[#7f6e63] hover:text-[#d26b54]" title="Nova campanha" aria-label="Resetar save">
-            <RotateCcw size={16} />
-          </button>
+          <button onClick={exportSave} className="p-2 text-[#a99284] hover:text-[#e8ddd0]" title="Copiar código do save" aria-label="Exportar save"><ClipboardCopy size={16} /></button>
+          <button onClick={importSave} className="p-2 text-[#a99284] hover:text-[#e8ddd0]" title="Importar save" aria-label="Importar save"><Upload size={16} /></button>
+          <button onClick={resetLocalSave} className="p-2 text-[#7f6e63] hover:text-[#d26b54]" title="Nova campanha" aria-label="Resetar save"><RotateCcw size={16} /></button>
         </div>
       </header>
 
-      {phase === "create-p1" && (
-        <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise">
-          <CharacterCreator playerLabel="Jogador 1" onConfirm={handleP1Confirm} />
-        </div>
-      )}
-
-      {phase === "create-p2" && (
-        <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise">
-          <CharacterCreator playerLabel="Jogador 2" onConfirm={handleP2Confirm} />
-        </div>
-      )}
+      {phase === "create-p1" && <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise"><CharacterCreator playerLabel="Jogador 1" onConfirm={handleP1Confirm} /></div>}
+      {phase === "create-p2" && <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise"><CharacterCreator playerLabel="Jogador 2" onConfirm={handleP2Confirm} /></div>}
 
       {phase === "game" && (
         <>
           <div className="flex gap-2 px-5 py-3 border-b border-[#2a1f1a] bg-[#120e0c]">
-            {players.map((p, i) => {
-              if (!p) return null;
-              const xpInLevel = p.xp % XP_PER_LEVEL;
+            {players.map((player, index) => {
+              if (!player) return null;
+              const xpInLevel = player.xp % XP_PER_LEVEL;
               const pct = Math.min(100, (xpInLevel / XP_PER_LEVEL) * 100);
               return (
-                <div key={i} className="flex items-center gap-2 bg-[#1a1310] border border-[#2a1f1a] rounded px-2 py-1.5 flex-1">
-                  <div className="w-8 h-8 flex-shrink-0">
-                    <CharacterAvatar skinHex={p.skin.hex} hairHex={p.hair.hex} gender={p.archetype.gender} size={32} />
-                  </div>
+                <div key={index} className="flex items-center gap-2 bg-[#1a1310] border border-[#2a1f1a] rounded px-2 py-1.5 flex-1">
+                  <div className="w-8 h-8 flex-shrink-0"><CharacterAvatar skinHex={player.skin.hex} hairHex={player.hair.hex} gender={player.archetype.gender} size={32} /></div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1">
-                      <p className="text-xs font-medium text-[#e8ddd0] truncate">{p.nick}</p>
-                      <span className="text-[9px] ember flex items-center gap-0.5 flex-shrink-0"><Star size={8} /> {p.level}</span>
-                    </div>
-                    <div className="w-full h-1 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden">
-                      <div className="h-full bg-[#b8492f]" style={{ width: `${pct}%` }} />
-                    </div>
+                    <div className="flex items-center gap-1"><p className="text-xs font-medium text-[#e8ddd0] truncate">{player.nick}</p><span className="text-[9px] ember flex items-center gap-0.5 flex-shrink-0"><Star size={8} /> {player.level}</span></div>
+                    <div className="w-full h-1 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden"><div className="h-full bg-[#b8492f]" style={{ width: `${pct}%` }} /></div>
                   </div>
                 </div>
               );
@@ -351,80 +323,32 @@ function App({ onExit }) {
           </div>
 
           <div className="flex border-b border-[#2a1f1a] bg-[#120e0c]">
-            <button onClick={() => setView("chat")} className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs uppercase tracking-wider font-display transition-colors ${view === "chat" ? "text-[#e8ddd0] border-b-2 border-[#b8492f]" : "text-[#8a7a6d]"}`}>
-              <MessageSquare size={13} /> Mesa
-            </button>
-            <button onClick={() => setView("map")} className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs uppercase tracking-wider font-display transition-colors ${view === "map" ? "text-[#e8ddd0] border-b-2 border-[#b8492f]" : "text-[#8a7a6d]"}`}>
-              <MapIcon size={13} /> Mapa
-            </button>
+            <button onClick={() => setView("chat")} className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs uppercase tracking-wider font-display transition-colors ${view === "chat" ? "text-[#e8ddd0] border-b-2 border-[#b8492f]" : "text-[#8a7a6d]"}`}><MessageSquare size={13} /> Mesa</button>
+            <button onClick={() => setView("map")} className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs uppercase tracking-wider font-display transition-colors ${view === "map" ? "text-[#e8ddd0] border-b-2 border-[#b8492f]" : "text-[#8a7a6d]"}`}><MapIcon size={13} /> Mapa</button>
           </div>
 
           {view === "map" ? (
-            <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise">
-              <CampaignMap revealedIds={revealedRegions} currentId={currentRegion} />
-            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise"><CampaignMap revealedIds={revealedRegions} currentId={currentRegion} /></div>
           ) : (
             <>
               <main ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6 space-y-5 bg-noise">
-                {messages.length === 0 && (
-                  <div className="text-center py-16 space-y-3">
-                    <Flame size={28} className="ember mx-auto opacity-60" />
-                    <p className="text-[#8a7a6d] text-sm max-w-sm mx-auto leading-relaxed">
-                      Os personagens estão prontos. Escreva "vamos começar" para o mestre abrir a campanha.
-                    </p>
-                  </div>
-                )}
-                {messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[85%] rounded px-4 py-3 text-[15px] leading-relaxed whitespace-pre-wrap ${m.role === "user" ? "bg-[#2a1f1a] text-[#e8ddd0]" : "bg-[#1a1310] border border-[#2a1f1a] text-[#d9cbb8]"}`}>
-                      {m.role === "model" && (
-                        <div className="flex items-center gap-2 mb-1.5 text-xs ember tracking-wider uppercase font-display"><ScrollText size={12} /> Mestre</div>
-                      )}
-                      {m.text}
-                    </div>
-                  </div>
-                ))}
-                {loading && (
-                  <div className="flex justify-start">
-                    <div className="bg-[#1a1310] border border-[#2a1f1a] rounded px-4 py-3 text-sm text-[#8a7a6d] italic">O mestre está tecendo o destino de vocês...</div>
-                  </div>
-                )}
-                {error && (
-                  <div className="text-center"><p className="text-xs text-[#b8492f] bg-[#1a1310] inline-block px-3 py-2 rounded border border-[#3a2419]">{error}</p></div>
-                )}
-                {pendingTests.map((nick) => {
-                  const p = players.find((pl) => pl?.nick === nick);
-                  if (!p) return null;
-                  return <DiceRoller key={nick} player={p} onRoll={handleDiceResult} />;
-                })}
+                {messages.length === 0 && <div className="text-center py-16 space-y-3"><Flame size={28} className="ember mx-auto opacity-60" /><p className="text-[#8a7a6d] text-sm max-w-sm mx-auto leading-relaxed">Os personagens estão prontos. Escreva "vamos começar" para o mestre abrir a campanha.</p></div>}
+                {messages.map((message, index) => <div key={index} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}><div className={`max-w-[85%] rounded px-4 py-3 text-[15px] leading-relaxed whitespace-pre-wrap ${message.role === "user" ? "bg-[#2a1f1a] text-[#e8ddd0]" : "bg-[#1a1310] border border-[#2a1f1a] text-[#d9cbb8]"}`}>{message.role === "model" && <div className="flex items-center gap-2 mb-1.5 text-xs ember tracking-wider uppercase font-display"><ScrollText size={12} /> Mestre</div>}{message.text}</div></div>)}
+                {loading && <div className="flex justify-start"><div className="bg-[#1a1310] border border-[#2a1f1a] rounded px-4 py-3 text-sm text-[#8a7a6d] italic">O mestre está tecendo o destino de vocês...</div></div>}
+                {error && <div className="text-center"><p className="text-xs text-[#b8492f] bg-[#1a1310] inline-block px-3 py-2 rounded border border-[#3a2419]">{error}</p></div>}
+                {pendingTests.map((nick) => { const player = players.find((candidate) => candidate?.nick === nick); return player ? <DiceRoller key={nick} player={player} onRoll={handleDiceResult} /> : null; })}
               </main>
 
               <footer className="border-t border-[#2a1f1a] bg-[#120e0c] px-5 py-4">
                 <div className="flex gap-2 items-end">
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMessage(input);
-                      }
-                    }}
-                    placeholder="O que vocês fazem?"
-                    rows={1}
-                    className="flex-1 bg-[#0e0b0a] border border-[#3a2a24] rounded px-3 py-2.5 text-sm text-[#e8ddd0] placeholder-[#5a4d43] focus:outline-none focus:border-[#b8492f] resize-none"
-                  />
-                  <button onClick={() => sendMessage(input)} disabled={loading || !input.trim()} className="bg-[#7a2419] hover:bg-[#8e2c1f] disabled:opacity-40 disabled:hover:bg-[#7a2419] text-[#f0e6da] p-2.5 rounded transition-colors" aria-label="Enviar">
-                    <Send size={18} />
-                  </button>
+                  <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(input); } }} placeholder="O que vocês fazem?" rows={1} maxLength={3000} className="flex-1 bg-[#0e0b0a] border border-[#3a2a24] rounded px-3 py-2.5 text-sm text-[#e8ddd0] placeholder-[#5a4d43] focus:outline-none focus:border-[#b8492f] resize-none" />
+                  <button onClick={() => sendMessage(input)} disabled={loading || !input.trim()} className="bg-[#7a2419] hover:bg-[#8e2c1f] disabled:opacity-40 disabled:hover:bg-[#7a2419] text-[#f0e6da] p-2.5 rounded transition-colors" aria-label="Enviar"><Send size={18} /></button>
                 </div>
               </footer>
             </>
           )}
 
-          {currentLevelUpIdx >= 0 && (
-            <LevelUpModal player={players[currentLevelUpIdx]} onChoose={(choice) => handleLevelChoice(currentLevelUpIdx, choice)} />
-          )}
+          {currentLevelUpIdx >= 0 && <LevelUpModal player={players[currentLevelUpIdx]} onChoose={(choice) => handleLevelChoice(currentLevelUpIdx, choice)} />}
         </>
       )}
     </div>
