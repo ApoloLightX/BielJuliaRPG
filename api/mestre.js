@@ -13,6 +13,7 @@ const PROVIDER_TIMEOUT_MS = 25_000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_REQUESTS = 20;
 const ATTR_KEYS = ["forca", "astucia", "vigor", "vontade"];
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
 
 class HttpError extends Error {
@@ -35,6 +36,11 @@ function compactText(value, maxLength) {
 function clampNumber(value, min, max, fallback = min) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? Math.min(max, Math.max(min, numeric)) : fallback;
+}
+
+export function normalizeCampaignId(value) {
+  const id = compactText(value, 36);
+  return UUID_PATTERN.test(id) ? id.toLowerCase() : null;
 }
 
 export function sanitizePlayers(players) {
@@ -174,7 +180,7 @@ function checkRateLimit(key) {
   return current.count <= RATE_LIMIT_REQUESTS;
 }
 
-function getSupabaseAuthClient() {
+function getSupabaseClient(accessToken = null) {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
   const key =
     process.env.SUPABASE_PUBLISHABLE_KEY ||
@@ -184,24 +190,48 @@ function getSupabaseAuthClient() {
 
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: accessToken
+      ? { headers: { Authorization: `Bearer ${accessToken}` } }
+      : undefined,
   });
 }
 
 async function authenticateRequest(req) {
   if (process.env.MESTRE_ALLOW_GUEST === "true") {
     const forwarded = compactText(req.headers?.["x-forwarded-for"], 128).split(",")[0];
-    return { id: `guest:${forwarded || "unknown"}` };
+    return { id: `guest:${forwarded || "unknown"}`, guest: true, token: null };
   }
 
   const header = typeof req.headers?.authorization === "string" ? req.headers.authorization : "";
   const match = /^Bearer\s+(.+)$/i.exec(header);
   if (!match) throw new HttpError("Faça login para falar com o Mestre", 401);
 
-  const { data, error: authError } = await getSupabaseAuthClient().auth.getUser(match[1]);
+  const token = match[1];
+  const { data, error: authError } = await getSupabaseClient().auth.getUser(token);
   if (authError || !data?.user?.id) {
     throw new HttpError("Sessão inválida ou expirada", 401);
   }
-  return data.user;
+  return { id: data.user.id, guest: false, token };
+}
+
+async function authorizeCampaign(identity, campaignId) {
+  if (identity.guest) return null;
+
+  const normalizedId = normalizeCampaignId(campaignId);
+  if (!normalizedId) throw new HttpError("Campanha inválida", 400);
+
+  const { data, error } = await getSupabaseClient(identity.token).rpc("is_campaign_member", {
+    p_campaign_id: normalizedId,
+  });
+
+  if (error) {
+    console.error("Falha ao validar participação na campanha", {
+      code: error.code || null,
+    });
+    throw new HttpError("Não foi possível validar o acesso à campanha", 503);
+  }
+  if (data !== true) throw new HttpError("Acesso à campanha negado", 403);
+  return normalizedId;
 }
 
 async function fetchWithTimeout(url, options) {
@@ -274,13 +304,15 @@ export default async function handler(req, res) {
       return res.status(413).json({ error: "Requisição grande demais" });
     }
 
-    const user = await authenticateRequest(req);
-    if (!checkRateLimit(user.id)) {
+    const identity = await authenticateRequest(req);
+    if (!checkRateLimit(identity.id)) {
       res.setHeader("Retry-After", "60");
       return res.status(429).json({ error: "Muitas ações em pouco tempo. Tente novamente em instantes." });
     }
 
-    const { messages, players } = req.body || {};
+    const { messages, players, campaignId } = req.body || {};
+    await authorizeCampaign(identity, campaignId);
+
     const cleanMessages = normalizeMessages(messages);
     if (!cleanMessages.length) {
       return res.status(400).json({ error: "Nenhuma mensagem válida recebida" });
