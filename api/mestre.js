@@ -13,6 +13,15 @@ const PROVIDER_TIMEOUT_MS = 25_000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_REQUESTS = 20;
 const ATTR_KEYS = ["forca", "astucia", "vigor", "vontade"];
+export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
+
+class HttpError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
 
 const rateBuckets = globalThis.__bielJuliaRateBuckets || new Map();
 globalThis.__bielJuliaRateBuckets = rateBuckets;
@@ -128,6 +137,32 @@ export function normalizeMessages(messages) {
   return normalized.reverse();
 }
 
+export function createGroqPayload(systemPrompt, messages, model = DEFAULT_GROQ_MODEL) {
+  return {
+    model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      ...messages.map((message) => ({
+        role: message.role === "user" ? "user" : "assistant",
+        content: message.text,
+      })),
+    ],
+    temperature: 0.9,
+    max_completion_tokens: 1800,
+  };
+}
+
+export function createGeminiPayload(systemPrompt, messages) {
+  return {
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: messages.map((message) => ({
+      role: message.role === "user" ? "user" : "model",
+      parts: [{ text: message.text }],
+    })),
+    generationConfig: { temperature: 0.9, maxOutputTokens: 1800 },
+  };
+}
+
 function checkRateLimit(key) {
   const now = Date.now();
   const current = rateBuckets.get(key);
@@ -160,17 +195,11 @@ async function authenticateRequest(req) {
 
   const header = typeof req.headers?.authorization === "string" ? req.headers.authorization : "";
   const match = /^Bearer\s+(.+)$/i.exec(header);
-  if (!match) {
-    const error = new Error("Faça login para falar com o Mestre");
-    error.status = 401;
-    throw error;
-  }
+  if (!match) throw new HttpError("Faça login para falar com o Mestre", 401);
 
   const { data, error: authError } = await getSupabaseAuthClient().auth.getUser(match[1]);
   if (authError || !data?.user?.id) {
-    const error = new Error("Sessão inválida ou expirada");
-    error.status = 401;
-    throw error;
+    throw new HttpError("Sessão inválida ou expirada", 401);
   }
   return data.user;
 }
@@ -189,25 +218,14 @@ async function askGroq({ apiKey, systemPrompt, messages }) {
   const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages.map((message) => ({
-          role: message.role === "user" ? "user" : "assistant",
-          content: message.text,
-        })),
-      ],
-      temperature: 0.9,
-      max_completion_tokens: 1800,
-    }),
+    body: JSON.stringify(
+      createGroqPayload(systemPrompt, messages, process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL)
+    ),
   });
 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const error = new Error(data?.error?.message || `Groq HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
+    throw new HttpError(data?.error?.message || `Groq HTTP ${response.status}`, response.status);
   }
 
   const reply = data?.choices?.[0]?.message?.content?.trim();
@@ -224,22 +242,13 @@ async function askGemini({ apiKey, systemPrompt, messages }) {
         "Content-Type": "application/json",
         "x-goog-api-key": apiKey,
       },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: messages.map((message) => ({
-          role: message.role === "user" ? "user" : "model",
-          parts: [{ text: message.text }],
-        })),
-        generationConfig: { temperature: 0.9, maxOutputTokens: 1800 },
-      }),
+      body: JSON.stringify(createGeminiPayload(systemPrompt, messages)),
     }
   );
 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const error = new Error(data?.error?.message || `Gemini HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
+    throw new HttpError(data?.error?.message || `Gemini HTTP ${response.status}`, response.status);
   }
 
   const reply = data?.candidates?.[0]?.content?.parts
@@ -290,10 +299,10 @@ export default async function handler(req, res) {
         return res.status(200).json(
           await askGroq({ apiKey: groqKey, systemPrompt, messages: cleanMessages })
         );
-      } catch (error) {
+      } catch (providerError) {
         console.warn("Provider groq indisponivel", {
-          status: error?.status || null,
-          name: error?.name || "Error",
+          status: providerError?.status || null,
+          name: providerError?.name || "Error",
         });
       }
     }
@@ -303,10 +312,10 @@ export default async function handler(req, res) {
         return res.status(200).json(
           await askGemini({ apiKey: geminiKey, systemPrompt, messages: cleanMessages })
         );
-      } catch (error) {
+      } catch (providerError) {
         console.error("Provider gemini indisponivel", {
-          status: error?.status || null,
-          name: error?.name || "Error",
+          status: providerError?.status || null,
+          name: providerError?.name || "Error",
         });
       }
     }
@@ -317,7 +326,11 @@ export default async function handler(req, res) {
       return res.status(504).json({ error: "O Mestre demorou demais para responder" });
     }
     const status = Number.isInteger(error?.status) ? error.status : 500;
-    if (status >= 500) console.error("Falha interna no endpoint mestre", { name: error?.name || "Error" });
-    return res.status(status).json({ error: status >= 500 ? "Falha interna do Mestre" : error.message });
+    if (status >= 500) {
+      console.error("Falha interna no endpoint mestre", { name: error?.name || "Error" });
+    }
+    return res.status(status).json({
+      error: status >= 500 ? "Falha interna do Mestre" : error.message,
+    });
   }
 }
