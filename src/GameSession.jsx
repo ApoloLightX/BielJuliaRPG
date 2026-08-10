@@ -257,7 +257,11 @@ export default function GameSession({ campaign, userId, onExit }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ messages: newMessages, players }),
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          messages: newMessages,
+          players,
+        }),
       });
 
       const data = await response.json().catch(() => ({}));
