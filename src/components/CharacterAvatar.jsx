@@ -23,8 +23,7 @@ function FaceMark({ mark, accent }) {
 }
 
 function WeaponLayer({ type, metal, accent }) {
-  const common = { stroke: metal, strokeWidth: 5, strokeLinecap: "round" };
-  if (type === "dual" || type === "dual-daggers") return <g opacity="0.96"><path d="M38 164 L73 115" {...common} /><path d="M34 169 L42 154 L48 162 Z" fill={accent} /><path d="M142 164 L108 115" {...common} /><path d="M146 169 L138 154 L132 162 Z" fill={accent} /></g>;
+  if (type === "dual" || type === "dual-daggers") return <g opacity="0.96"><path d="M38 164 L73 115" stroke={metal} strokeWidth="5" strokeLinecap="round" /><path d="M34 169 L42 154 L48 162 Z" fill={accent} /><path d="M142 164 L108 115" stroke={metal} strokeWidth="5" strokeLinecap="round" /><path d="M146 169 L138 154 L132 162 Z" fill={accent} /></g>;
   if (type === "sword" || type === "greatsword") return <g><path d="M140 178 L109 75" stroke={metal} strokeWidth={type === "greatsword" ? 8 : 5} strokeLinecap="round" /><path d="M103 91 L119 86" stroke={accent} strokeWidth="4" /><path d="M108 72 L115 88 L102 84 Z" fill={metal} /></g>;
   if (type === "dagger") return <g><path d="M139 164 L116 121" stroke={metal} strokeWidth="5" strokeLinecap="round" /><path d="M112 125 L122 121" stroke={accent} strokeWidth="3" /></g>;
   if (type === "bow") return <g fill="none"><path d="M139 63 Q164 111 139 169" stroke={accent} strokeWidth="5" /><path d="M139 63 L139 169" stroke={metal} strokeWidth="1.5" /></g>;
@@ -46,7 +45,7 @@ function OutfitLayer({ theme, style, primary, secondary, metal }) {
   return <g><path d="M56 115 Q90 99 124 115 L132 193 Q90 210 48 193Z" fill={primary} stroke={metal} strokeWidth="3" /><path d="M66 119 L90 129 L114 119 L109 180 Q90 192 71 180Z" fill={metal} opacity={light ? 0.35 : 0.78} stroke={secondary} strokeWidth="2" /><path d="M51 122 L33 169" stroke={metal} strokeWidth={heavy ? 20 : light ? 9 : 14} strokeLinecap="round" /><path d="M129 122 L147 169" stroke={metal} strokeWidth={heavy ? 20 : light ? 9 : 14} strokeLinecap="round" />{heavy && <><circle cx="55" cy="116" r="14" fill={metal} stroke={secondary} strokeWidth="3" /><circle cx="125" cy="116" r="14" fill={metal} stroke={secondary} strokeWidth="3" /></>}<path d="M58 180 Q90 194 122 180" stroke={secondary} strokeWidth="5" fill="none" /></g>;
 }
 
-function CharacterAvatar({ skinHex = "#d9ab7c", hairHex = "#1a1512", gender = "female", archetypeId = "lamina-cinzas", appearance, size = 160 }) {
+function CharacterAvatar({ skinHex = "#d9ab7c", hairHex = "#1a1512", gender = "female", archetypeId = "lamina-cinzas", appearance = null, size = 160 }) {
   const unique = useId().replace(/:/g, "");
   const safeAppearance = normalizeAppearance(archetypeId, gender, appearance || defaultAppearance(archetypeId, gender));
   const config = getClassAvatarConfig(archetypeId);
