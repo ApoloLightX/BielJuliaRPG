@@ -6,7 +6,7 @@ function hpClass(pct) {
   return "bg-[#b8492f]";
 }
 
-export default function CombatTracker({ combat, players, onAdvanceTurn, disabled = false }) {
+export default function CombatTracker({ combat, players, onAdvanceTurn = null, disabled = false }) {
   if (!combat || !Array.isArray(combat.order) || combat.order.length === 0) return null;
   const current = combat.order[combat.currentTurnIndex] || combat.order[0];
 
