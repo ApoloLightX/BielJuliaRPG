@@ -6,12 +6,19 @@ import {
 } from "../data/archetypes.js";
 import { MAP_REGIONS } from "../data/mapRegions.js";
 
-export const GAME_SCHEMA_VERSION = 3;
+export const GAME_SCHEMA_VERSION = 4;
 export const MAX_SAVED_MESSAGES = 200;
 export const MAX_INVENTORY_ITEMS = 20;
+export const EMPTY_JOURNAL = Object.freeze({
+  summary: "",
+  objective: "",
+  clues: [],
+  npcs: [],
+  decisions: [],
+});
 
 const VALID_PHASES = new Set(["create-p1", "create-p2", "game"]);
-const VALID_VIEWS = new Set(["chat", "map", "sheet"]);
+const VALID_VIEWS = new Set(["chat", "map", "sheet", "journal"]);
 const VALID_REGION_IDS = new Set(MAP_REGIONS.map((region) => region.id));
 
 function clampNumber(value, min, max, fallback = min) {
@@ -24,14 +31,28 @@ function cleanText(value, maxLength) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
 
+function uniqueTextList(value, maxItems, maxLength) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of value) {
+    const text = cleanText(item, maxLength);
+    const key = text.toLocaleLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
 export function calculateMaxHp(attrs) {
   const vigor = Math.trunc(clampNumber(attrs?.vigor, 1, 4, 1));
   return 10 + vigor * 3;
 }
 
 function normalizeInventory(value) {
-  if (!Array.isArray(value)) return [];
-  return value.slice(0, MAX_INVENTORY_ITEMS).map((item) => cleanText(item, 80)).filter(Boolean);
+  return uniqueTextList(value, MAX_INVENTORY_ITEMS, 80);
 }
 
 function normalizePlayer(player) {
@@ -53,7 +74,9 @@ function normalizePlayer(player) {
       skillLevels.set(canonical.name, Math.trunc(clampNumber(skill?.level, 1, 20, 1)));
     }
   }
-  for (const skill of archetype.skills) if (!skillLevels.has(skill.name)) skillLevels.set(skill.name, 1);
+  for (const skill of archetype.skills) {
+    if (!skillLevels.has(skill.name)) skillLevels.set(skill.name, 1);
+  }
   const skills = [...skillLevels.entries()].map(([name, level]) => ({ ...allowedByName.get(name), level }));
   const unlocked = new Set(skills.map((skill) => skill.name));
   const xp = Math.trunc(clampNumber(player.xp, 0, 1_000_000, 0));
@@ -64,7 +87,9 @@ function normalizePlayer(player) {
     archetype: {
       ...archetype,
       skills: archetype.skills.map((skill) => ({ ...skill })),
-      lockedSkills: archetype.lockedSkills.filter((skill) => !unlocked.has(skill.name)).map((skill) => ({ ...skill })),
+      lockedSkills: archetype.lockedSkills
+        .filter((skill) => !unlocked.has(skill.name))
+        .map((skill) => ({ ...skill })),
     },
     hair: { ...hair },
     skin: { ...skin },
@@ -102,10 +127,51 @@ export function initPlayer(character) {
   };
 }
 
+export function sanitizeJournal(input) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : EMPTY_JOURNAL;
+  const npcs = [];
+  const seenNpcs = new Set();
+  for (const raw of Array.isArray(source.npcs) ? source.npcs : []) {
+    const name = cleanText(raw?.name, 80);
+    const description = cleanText(raw?.description, 300);
+    const key = name.toLocaleLowerCase();
+    if (!name || seenNpcs.has(key)) continue;
+    seenNpcs.add(key);
+    npcs.push({ name, description });
+    if (npcs.length >= 20) break;
+  }
+  return {
+    summary: cleanText(source.summary, 1_200),
+    objective: cleanText(source.objective, 400),
+    clues: uniqueTextList(source.clues, 20, 300),
+    npcs,
+    decisions: uniqueTextList(source.decisions, 20, 300),
+  };
+}
+
+function combatEntryHp(entry, players) {
+  if (entry?.type === "enemy") return entry.hp;
+  if (entry?.type === "player") {
+    return players.find((player) => player?.nick === entry.name)?.hp ?? 0;
+  }
+  return 0;
+}
+
+function findAliveCombatIndex(order, players, startIndex = 0) {
+  if (!Array.isArray(order) || order.length === 0) return -1;
+  for (let offset = 0; offset < order.length; offset += 1) {
+    const index = (startIndex + offset + order.length) % order.length;
+    if (combatEntryHp(order[index], players) > 0) return index;
+  }
+  return -1;
+}
+
 export function sanitizeCombat(input, players = []) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const name = cleanText(input.name, 80) || "Confronto";
-  const validPlayers = new Map(players.filter(Boolean).map((player) => [player.nick.toLocaleLowerCase(), player.nick]));
+  const validPlayers = new Map(
+    players.filter(Boolean).map((player) => [player.nick.toLocaleLowerCase(), player.nick])
+  );
   const seen = new Set();
   const order = [];
   for (const rawEntry of Array.isArray(input.order) ? input.order.slice(0, 12) : []) {
@@ -130,29 +196,83 @@ export function sanitizeCombat(input, players = []) {
       order.push({ type: "enemy", name: rawName, hp, maxHp });
     }
   }
-  return order.length ? { name, order } : null;
+  if (!order.length) return null;
+  const round = Math.trunc(clampNumber(input.round, 1, 999, 1));
+  const requestedIndex = Math.trunc(clampNumber(input.currentTurnIndex, 0, order.length - 1, 0));
+  const currentTurnIndex = findAliveCombatIndex(order, players, requestedIndex);
+  return currentTurnIndex < 0 ? null : { name, order, round, currentTurnIndex };
+}
+
+export function getCurrentCombatant(combat, players = []) {
+  const safe = sanitizeCombat(combat, players);
+  if (!safe) return null;
+  return safe.order[safe.currentTurnIndex] || null;
+}
+
+export function advanceCombatTurn(combat, players = []) {
+  const safe = sanitizeCombat(combat, players);
+  if (!safe) return null;
+  const start = (safe.currentTurnIndex + 1) % safe.order.length;
+  const nextIndex = findAliveCombatIndex(safe.order, players, start);
+  if (nextIndex < 0) return null;
+  const wrapped = nextIndex <= safe.currentTurnIndex;
+  return {
+    ...safe,
+    currentTurnIndex: nextIndex,
+    round: Math.min(999, safe.round + (wrapped ? 1 : 0)),
+  };
 }
 
 export function sanitizeSnapshot(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Save invalido");
   const sourcePlayers = Array.isArray(input.players) ? input.players.slice(0, 2) : [];
   const players = [normalizePlayer(sourcePlayers[0]), normalizePlayer(sourcePlayers[1])];
-  if (players[0] && players[1] && players[0].nick.localeCompare(players[1].nick, undefined, { sensitivity: "accent" }) === 0) {
+  if (
+    players[0] &&
+    players[1] &&
+    players[0].nick.localeCompare(players[1].nick, undefined, { sensitivity: "accent" }) === 0
+  ) {
     const suffix = " 2";
-    players[1] = { ...players[1], nick: `${players[1].nick.slice(0, 20 - suffix.length)}${suffix}` };
+    players[1] = {
+      ...players[1],
+      nick: `${players[1].nick.slice(0, 20 - suffix.length)}${suffix}`,
+    };
   }
   let phase = VALID_PHASES.has(input.phase) ? input.phase : "create-p1";
   if (!players[0]) phase = "create-p1";
   else if (!players[1] && phase === "game") phase = "create-p2";
-  const messages = (Array.isArray(input.messages) ? input.messages : []).slice(-MAX_SAVED_MESSAGES).map((message) => ({
-    role: message?.role === "model" ? "model" : "user",
-    text: cleanText(message?.text, 4_000),
-  })).filter((message) => message.text);
-  const validNicks = new Map(players.filter(Boolean).map((player) => [player.nick.toLocaleLowerCase(), player.nick]));
-  const pendingTests = [...new Set((Array.isArray(input.pendingTests) ? input.pendingTests : []).map((nick) => validNicks.get(cleanText(nick, 20).toLocaleLowerCase())).filter(Boolean))];
-  const levelUpQueue = (Array.isArray(input.levelUpQueue) ? input.levelUpQueue : []).map((nick) => validNicks.get(cleanText(nick, 20).toLocaleLowerCase())).filter(Boolean).slice(0, 20);
-  const revealedRegions = [...new Set((Array.isArray(input.revealedRegions) ? input.revealedRegions : []).filter((id) => VALID_REGION_IDS.has(id)))];
-  const currentRegion = VALID_REGION_IDS.has(input.currentRegion) && revealedRegions.includes(input.currentRegion) ? input.currentRegion : null;
+  const messages = (Array.isArray(input.messages) ? input.messages : [])
+    .slice(-MAX_SAVED_MESSAGES)
+    .map((message) => ({
+      role: message?.role === "model" ? "model" : "user",
+      text: cleanText(message?.text, 4_000),
+    }))
+    .filter((message) => message.text);
+  const validNicks = new Map(
+    players.filter(Boolean).map((player) => [player.nick.toLocaleLowerCase(), player.nick])
+  );
+  const pendingTests = [
+    ...new Set(
+      (Array.isArray(input.pendingTests) ? input.pendingTests : [])
+        .map((nick) => validNicks.get(cleanText(nick, 20).toLocaleLowerCase()))
+        .filter(Boolean)
+    ),
+  ];
+  const levelUpQueue = (Array.isArray(input.levelUpQueue) ? input.levelUpQueue : [])
+    .map((nick) => validNicks.get(cleanText(nick, 20).toLocaleLowerCase()))
+    .filter(Boolean)
+    .slice(0, 20);
+  const revealedRegions = [
+    ...new Set(
+      (Array.isArray(input.revealedRegions) ? input.revealedRegions : []).filter((id) =>
+        VALID_REGION_IDS.has(id)
+      )
+    ),
+  ];
+  const currentRegion =
+    VALID_REGION_IDS.has(input.currentRegion) && revealedRegions.includes(input.currentRegion)
+      ? input.currentRegion
+      : null;
   return {
     schemaVersion: GAME_SCHEMA_VERSION,
     phase,
@@ -163,6 +283,7 @@ export function sanitizeSnapshot(input) {
     revealedRegions,
     currentRegion,
     combat: sanitizeCombat(input.combat, players),
+    journal: sanitizeJournal(input.journal),
     view: VALID_VIEWS.has(input.view) ? input.view : "chat",
   };
 }
@@ -195,19 +316,65 @@ function parseCombatStart(source) {
       order.push({ type: "player", name: playerName });
     }
   }
-  return order.length ? { name, order } : null;
+  return order.length ? { name, order, round: 1, currentTurnIndex: 0 } : null;
+}
+
+function parseJournalUpdates(source) {
+  const lastText = (pattern, maxLength) => {
+    const matches = [...source.matchAll(pattern)];
+    return matches.length ? cleanText(matches.at(-1)[1], maxLength) : "";
+  };
+  return {
+    summary: lastText(/\[\[RESUMO:\s*([^\]]+)\]\]/g, 1_200),
+    objective: lastText(/\[\[OBJETIVO:\s*([^\]]+)\]\]/g, 400),
+    clues: [...source.matchAll(/\[\[PISTA:\s*([^\]]+)\]\]/g)]
+      .map((match) => cleanText(match[1], 300))
+      .filter(Boolean),
+    npcs: [...source.matchAll(/\[\[NPC:\s*([^|\]]+)\|\s*([^\]]*)\]\]/g)]
+      .map((match) => ({ name: cleanText(match[1], 80), description: cleanText(match[2], 300) }))
+      .filter((npc) => npc.name),
+    decisions: [...source.matchAll(/\[\[DECISAO:\s*([^\]]+)\]\]/g)]
+      .map((match) => cleanText(match[1], 300))
+      .filter(Boolean),
+  };
 }
 
 export function parseDirectives(text) {
   const source = typeof text === "string" ? text : "";
-  const testMatches = [...new Set([...source.matchAll(/\[\[TESTE:\s*([^\]]+)\]\]/g)].map((match) => cleanText(match[1], 20)).filter(Boolean))];
-  const xpMatches = [...source.matchAll(/\[\[XP:\s*([^|]+)\|\s*(\d+)\]\]/g)].map((match) => ({ nick: cleanText(match[1], 20), amount: Math.trunc(clampNumber(match[2], 1, 500, 1)) })).filter((award) => award.nick);
-  const mapMatches = [...new Set([...source.matchAll(/\[\[MAPA:\s*([^\]]+)\]\]/g)].map((match) => cleanText(match[1], 64)).filter((id) => VALID_REGION_IDS.has(id)))];
-  const damageMatches = [...source.matchAll(/\[\[DANO:\s*([^|]+)\|\s*(\d+)\]\]/g)].map((match) => ({ nick: cleanText(match[1], 20), amount: Math.trunc(clampNumber(match[2], 1, 100, 1)) })).filter((effect) => effect.nick);
-  const healMatches = [...source.matchAll(/\[\[CURA:\s*([^|]+)\|\s*(\d+)\]\]/g)].map((match) => ({ nick: cleanText(match[1], 20), amount: Math.trunc(clampNumber(match[2], 1, 100, 1)) })).filter((effect) => effect.nick);
-  const enemyDamageMatches = [...source.matchAll(/\[\[INIMIGO_DANO:\s*([^|]+)\|\s*(\d+)\]\]/g)].map((match) => ({ name: cleanText(match[1], 80), amount: Math.trunc(clampNumber(match[2], 1, 100, 1)) })).filter((effect) => effect.name);
+  const testMatches = [
+    ...new Set(
+      [...source.matchAll(/\[\[TESTE:\s*([^\]]+)\]\]/g)]
+        .map((match) => cleanText(match[1], 20))
+        .filter(Boolean)
+    ),
+  ];
+  const xpMatches = [...source.matchAll(/\[\[XP:\s*([^|]+)\|\s*(\d+)\]\]/g)]
+    .map((match) => ({
+      nick: cleanText(match[1], 20),
+      amount: Math.trunc(clampNumber(match[2], 1, 500, 1)),
+    }))
+    .filter((award) => award.nick);
+  const mapMatches = [
+    ...new Set(
+      [...source.matchAll(/\[\[MAPA:\s*([^\]]+)\]\]/g)]
+        .map((match) => cleanText(match[1], 64))
+        .filter((id) => VALID_REGION_IDS.has(id))
+    ),
+  ];
+  const damageMatches = [...source.matchAll(/\[\[DANO:\s*([^|]+)\|\s*(\d+)\]\]/g)]
+    .map((match) => ({ nick: cleanText(match[1], 20), amount: Math.trunc(clampNumber(match[2], 1, 100, 1)) }))
+    .filter((effect) => effect.nick);
+  const healMatches = [...source.matchAll(/\[\[CURA:\s*([^|]+)\|\s*(\d+)\]\]/g)]
+    .map((match) => ({ nick: cleanText(match[1], 20), amount: Math.trunc(clampNumber(match[2], 1, 100, 1)) }))
+    .filter((effect) => effect.nick);
+  const enemyDamageMatches = [
+    ...source.matchAll(/\[\[INIMIGO_DANO:\s*([^|]+)\|\s*(\d+)\]\]/g),
+  ]
+    .map((match) => ({ name: cleanText(match[1], 80), amount: Math.trunc(clampNumber(match[2], 1, 100, 1)) }))
+    .filter((effect) => effect.name);
   const startCombat = parseCombatStart(source);
   const endCombat = /\[\[FIM_COMBATE\]\]/.test(source);
+  const journalUpdates = parseJournalUpdates(source);
   const cleanNarrative = source
     .replace(/\[\[TESTE:[^\]]+\]\]/g, "")
     .replace(/\[\[XP:[^\]]+\]\]/g, "")
@@ -217,15 +384,55 @@ export function parseDirectives(text) {
     .replace(/\[\[INICIAR_COMBATE:[^\]]+\]\]/g, "")
     .replace(/\[\[INIMIGO_DANO:[^\]]+\]\]/g, "")
     .replace(/\[\[FIM_COMBATE\]\]/g, "")
+    .replace(/\[\[RESUMO:[^\]]+\]\]/g, "")
+    .replace(/\[\[OBJETIVO:[^\]]+\]\]/g, "")
+    .replace(/\[\[PISTA:[^\]]+\]\]/g, "")
+    .replace(/\[\[NPC:[^\]]+\]\]/g, "")
+    .replace(/\[\[DECISAO:[^\]]+\]\]/g, "")
     .trim();
-  return { cleanText: cleanNarrative, testMatches, xpMatches, mapMatches, damageMatches, healMatches, startCombat, enemyDamageMatches, endCombat };
+  return {
+    cleanText: cleanNarrative,
+    testMatches,
+    xpMatches,
+    mapMatches,
+    damageMatches,
+    healMatches,
+    startCombat,
+    enemyDamageMatches,
+    endCombat,
+    journalUpdates,
+  };
+}
+
+export function applyJournalUpdates(journal, updates) {
+  const current = sanitizeJournal(journal);
+  const next = {
+    ...current,
+    summary: cleanText(updates?.summary, 1_200) || current.summary,
+    objective: cleanText(updates?.objective, 400) || current.objective,
+    clues: uniqueTextList([...current.clues, ...(updates?.clues || [])], 20, 300),
+    decisions: uniqueTextList([...current.decisions, ...(updates?.decisions || [])], 20, 300),
+    npcs: [...current.npcs],
+  };
+  for (const raw of Array.isArray(updates?.npcs) ? updates.npcs : []) {
+    const name = cleanText(raw?.name, 80);
+    const description = cleanText(raw?.description, 300);
+    if (!name) continue;
+    const index = next.npcs.findIndex((npc) => npc.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    if (index >= 0) next.npcs[index] = { name: next.npcs[index].name, description: description || next.npcs[index].description };
+    else if (next.npcs.length < 20) next.npcs.push({ name, description });
+  }
+  return sanitizeJournal(next);
 }
 
 export function applyXpAwards(players, awards) {
   const nextPlayers = players.map((player) => (player ? { ...player } : null));
   const levelUps = [];
   for (const award of Array.isArray(awards) ? awards : []) {
-    const index = nextPlayers.findIndex((player) => player && player.nick.toLocaleLowerCase() === cleanText(award?.nick, 20).toLocaleLowerCase());
+    const index = nextPlayers.findIndex(
+      (player) =>
+        player && player.nick.toLocaleLowerCase() === cleanText(award?.nick, 20).toLocaleLowerCase()
+    );
     if (index < 0) continue;
     const player = nextPlayers[index];
     const amount = Math.trunc(clampNumber(award?.amount, 1, 500, 1));
@@ -241,11 +448,16 @@ export function applyHpEffects(players, damage = [], healing = []) {
   const nextPlayers = players.map((player) => (player ? { ...player } : null));
   const apply = (effects, direction) => {
     for (const effect of Array.isArray(effects) ? effects : []) {
-      const index = nextPlayers.findIndex((player) => player && player.nick.toLocaleLowerCase() === cleanText(effect?.nick, 20).toLocaleLowerCase());
+      const index = nextPlayers.findIndex(
+        (player) =>
+          player && player.nick.toLocaleLowerCase() === cleanText(effect?.nick, 20).toLocaleLowerCase()
+      );
       if (index < 0) continue;
       const player = nextPlayers[index];
       const amount = Math.trunc(clampNumber(effect?.amount, 1, 100, 1));
-      const hp = Math.trunc(clampNumber(player.hp + direction * amount, 0, player.maxHp, player.hp));
+      const hp = Math.trunc(
+        clampNumber(player.hp + direction * amount, 0, player.maxHp, player.hp)
+      );
       nextPlayers[index] = { ...player, hp };
     }
   };
