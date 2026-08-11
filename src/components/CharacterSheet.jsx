@@ -29,7 +29,14 @@ export default function CharacterSheet({ player, onChangeHp, onAddItem, onRemove
   return (
     <section className="bg-[#1a1310] border border-[#2a1f1a] rounded-lg p-4 space-y-4">
       <div className="flex items-center gap-3">
-        <CharacterAvatar skinHex={player.skin.hex} hairHex={player.hair.hex} gender={player.archetype.gender} size={44} />
+        <CharacterAvatar
+          skinHex={player.skin.hex}
+          hairHex={player.hair.hex}
+          gender={player.archetype.gender}
+          archetypeId={player.archetype.id}
+          appearance={player.appearance}
+          size={64}
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p className="text-base font-medium truncate">{player.nick}</p>
