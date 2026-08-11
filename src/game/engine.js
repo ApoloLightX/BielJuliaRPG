@@ -4,9 +4,10 @@ import {
   SKIN_TONES,
   XP_PER_LEVEL,
 } from "../data/archetypes.js";
+import { normalizeAppearance } from "../data/avatarCustomization.js";
 import { MAP_REGIONS } from "../data/mapRegions.js";
 
-export const GAME_SCHEMA_VERSION = 4;
+export const GAME_SCHEMA_VERSION = 5;
 export const MAX_SAVED_MESSAGES = 200;
 export const MAX_INVENTORY_ITEMS = 20;
 export const EMPTY_JOURNAL = Object.freeze({
@@ -64,6 +65,7 @@ function normalizePlayer(player) {
   if (!nick) return null;
   const hair = HAIR_COLORS.find((item) => item.id === player.hair?.id) || HAIR_COLORS[0];
   const skin = SKIN_TONES.find((item) => item.id === player.skin?.id) || SKIN_TONES[0];
+  const appearance = normalizeAppearance(archetype.id, archetype.gender, player.appearance);
   const allowedSkills = [...archetype.skills, ...archetype.lockedSkills];
   const allowedByName = new Map(allowedSkills.map((skill) => [skill.name, skill]));
   const skillLevels = new Map();
@@ -93,6 +95,7 @@ function normalizePlayer(player) {
     },
     hair: { ...hair },
     skin: { ...skin },
+    appearance,
     xp,
     level: Math.floor(xp / XP_PER_LEVEL) + 1,
     hp,
@@ -118,6 +121,7 @@ export function initPlayer(character) {
     },
     hair: { ...hair },
     skin: { ...skin },
+    appearance: normalizeAppearance(archetype.id, archetype.gender, character.appearance),
     level: 1,
     xp: 0,
     hp: maxHp,
