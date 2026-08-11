@@ -384,7 +384,7 @@ export default function GameSession({ campaign, userId, onExit }) {
               const hpPct = Math.max(0, Math.min(100, (player.hp / player.maxHp) * 100));
               return (
                 <div key={index} className="flex items-center gap-2 bg-[#1a1310] border border-[#2a1f1a] rounded px-2 py-1.5 flex-1 min-w-0">
-                  <CharacterAvatar skinHex={player.skin.hex} hairHex={player.hair.hex} gender={player.archetype.gender} size={32} />
+                  <CharacterAvatar skinHex={player.skin.hex} hairHex={player.hair.hex} gender={player.archetype.gender} archetypeId={player.archetype.id} appearance={player.appearance} size={32} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-1"><p className="text-xs font-medium truncate">{player.nick}</p><span className="text-[9px] ember flex items-center gap-0.5"><Star size={8} /> {player.level}</span></div>
                     <div className="w-full h-1 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden"><div className={hpBarClass(player)} style={{ width: `${hpPct}%`, height: "100%" }} /></div>
