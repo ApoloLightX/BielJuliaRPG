@@ -334,7 +334,7 @@ function App({ onExit }) {
               return (
                 <div key={i} className="flex items-center gap-2 bg-[#1a1310] border border-[#2a1f1a] rounded px-2 py-1.5 flex-1">
                   <div className="w-8 h-8 flex-shrink-0">
-                    <CharacterAvatar skinHex={p.skin.hex} hairHex={p.hair.hex} gender={p.archetype.gender} size={32} />
+                    <CharacterAvatar skinHex={p.skin.hex} hairHex={p.hair.hex} gender={p.archetype.gender} archetypeId={p.archetype.id} appearance={p.appearance} size={32} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1">
