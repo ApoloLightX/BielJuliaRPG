@@ -34,6 +34,19 @@ body {
   color: #b8492f;
 }
 
+/* Foto do casal na tela de autenticação. O seletor é restrito ao cabeçalho do AuthScreen. */
+#root > div.min-h-screen > div.w-full.max-w-md.space-y-5 > div.text-center::before {
+  content: '';
+  display: block;
+  width: 100%;
+  aspect-ratio: 1536 / 1031;
+  margin: 0 0 1rem;
+  background: url('/biel-julia.jpg') center / contain no-repeat;
+  border: 1px solid #34251f;
+  border-radius: 0.75rem;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.28);
+}
+
 :focus-visible {
   outline: 2px solid #b8492f;
   outline-offset: 2px;
