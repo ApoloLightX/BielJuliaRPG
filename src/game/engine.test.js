@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ARCHETYPES, HAIR_COLORS, SKIN_TONES } from "../data/archetypes.js";
+import { defaultAppearance } from "../data/avatarCustomization.js";
 import {
   advanceCombatTurn,
   applyEnemyDamage,
@@ -16,33 +17,72 @@ import {
 } from "./engine.js";
 
 function character(nick = "Biel", archetype = ARCHETYPES[4]) {
-  return { nick, archetype, hair: HAIR_COLORS[0], skin: SKIN_TONES[0] };
+  return {
+    nick,
+    archetype,
+    hair: HAIR_COLORS[0],
+    skin: SKIN_TONES[0],
+    appearance: defaultAppearance(archetype.id, archetype.gender),
+  };
 }
 
 describe("game engine", () => {
-  it("cria personagem canonico com HP e inventario", () => {
+  it("cria personagem canonico com HP, inventario e aparencia", () => {
     const player = initPlayer(character());
     expect(player.nick).toBe("Biel");
     expect(player.level).toBe(1);
     expect(player.maxHp).toBe(calculateMaxHp(player.archetype.attrs));
     expect(player.hp).toBe(player.maxHp);
     expect(player.inventory).toEqual([]);
+    expect(player.appearance.archetypeId).toBe(player.archetype.id);
+    expect(player.appearance.weaponId).toBeTruthy();
   });
 
   it("rejeita save que nao seja objeto", () => {
     expect(() => sanitizeSnapshot("corrupcao")).toThrow("Save invalido");
   });
 
-  it("migra save antigo para schema 4 sem perder personagem", () => {
+  it("migra save v4 para schema atual sem perder personagem e cria aparencia padrao", () => {
     const base = initPlayer(character());
     delete base.hp;
     delete base.maxHp;
     delete base.inventory;
-    const state = sanitizeSnapshot({ phase: "create-p2", players: [base, null], view: "chat" });
+    delete base.appearance;
+    const state = sanitizeSnapshot({ schemaVersion: 4, phase: "create-p2", players: [base, null], view: "chat" });
     expect(state.schemaVersion).toBe(GAME_SCHEMA_VERSION);
     expect(state.players[0].hp).toBe(state.players[0].maxHp);
     expect(state.players[0].inventory).toEqual([]);
+    expect(state.players[0].appearance).toEqual(defaultAppearance(state.players[0].archetype.id, state.players[0].archetype.gender));
     expect(state.journal).toEqual({ summary: "", objective: "", clues: [], npcs: [], decisions: [] });
+  });
+
+  it("preserva aparencia valida e rejeita IDs arbitrarios", () => {
+    const base = initPlayer(character("Julia", ARCHETYPES[0]));
+    const customized = {
+      ...base,
+      appearance: {
+        ...base.appearance,
+        hairStyle: "braid",
+        outfitStyle: "heavy",
+        paletteId: "royal",
+        weaponId: "dual-swords",
+        faceMark: "scar",
+      },
+    };
+    const valid = sanitizeSnapshot({ phase: "create-p2", players: [customized, null] });
+    expect(valid.players[0].appearance).toMatchObject({
+      hairStyle: "braid",
+      outfitStyle: "heavy",
+      paletteId: "royal",
+      weaponId: "dual-swords",
+      faceMark: "scar",
+    });
+
+    const invalid = sanitizeSnapshot({
+      phase: "create-p2",
+      players: [{ ...customized, appearance: { hairStyle: "hack", weaponId: "bazuca", paletteId: "neon" } }, null],
+    });
+    expect(invalid.players[0].appearance).toEqual(defaultAppearance(ARCHETYPES[0].id, ARCHETYPES[0].gender));
   });
 
   it("remove dados arbitrarios e corrige nivel a partir do XP", () => {
