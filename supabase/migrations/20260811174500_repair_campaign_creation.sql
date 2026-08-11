@@ -37,7 +37,7 @@ $$;
 
 revoke all on function public.enforce_campaign_creation() from public;
 
- drop trigger if exists campaign_creation_guard on public.campaigns;
+drop trigger if exists campaign_creation_guard on public.campaigns;
 create trigger campaign_creation_guard
 before insert on public.campaigns
 for each row execute function public.enforce_campaign_creation();
