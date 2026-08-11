@@ -1,0 +1,26 @@
+{
+  "name": "A Mesa Sob a Sombra",
+  "short_name": "Biel & Julia RPG",
+  "description": "RPG dark fantasy de Biel e Julia com Mestre de IA e campanha compartilhada.",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0e0b0a",
+  "theme_color": "#0e0b0a",
+  "icons": [
+    {
+      "src": "/pwa-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/pwa-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
