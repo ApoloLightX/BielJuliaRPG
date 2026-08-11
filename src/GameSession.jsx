@@ -61,6 +61,7 @@ export default function GameSession({ campaign, userId, onExit }) {
   const scrollRef = useRef(null);
   const saveTimerRef = useRef(null);
   const suppressSaveUntilRef = useRef(0);
+  const revisionRef = useRef(0);
 
   function snapshot() {
     return {
@@ -92,21 +93,25 @@ export default function GameSession({ campaign, userId, onExit }) {
     if (!hydrated) return true;
     if (!quiet) setSaveStatus("salvando");
 
-    const { error: saveError } = await supabase
-      .from("campaign_state")
-      .update({
-        state: nextState,
-        updated_by: userId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("campaign_id", campaign.id);
+    const { data, error: saveError } = await supabase.rpc("save_campaign_state", {
+      p_campaign_id: campaign.id,
+      p_expected_revision: revisionRef.current,
+      p_state: nextState,
+    });
 
     if (saveError) {
-      setSaveStatus("erro ao salvar");
-      setError(`Falha no save: ${saveError.message}`);
+      const conflict = /SAVE_CONFLICT|40001/i.test(`${saveError.message || ""} ${saveError.code || ""}`);
+      setSaveStatus(conflict ? "conflito" : "erro ao salvar");
+      setError(
+        conflict
+          ? "Outro aparelho salvou esta campanha antes. Volte às campanhas e abra novamente para sincronizar."
+          : `Falha no save: ${saveError.message}`
+      );
       return false;
     }
 
+    const row = Array.isArray(data) ? data[0] : data;
+    revisionRef.current = Number(row?.new_revision ?? revisionRef.current + 1);
     setSaveStatus("salvo");
     return true;
   }
@@ -119,15 +124,18 @@ export default function GameSession({ campaign, userId, onExit }) {
     async function loadState() {
       const { data, error: loadError } = await supabase
         .from("campaign_state")
-        .select("state,updated_at,updated_by")
+        .select("state,updated_at,updated_by,revision")
         .eq("campaign_id", campaign.id)
         .single();
 
       if (!active) return;
       if (loadError) {
         setError(`Não foi possível carregar o save: ${loadError.message}`);
-      } else if (data?.state && Object.keys(data.state).length > 0) {
-        applySnapshot(data.state);
+      } else {
+        revisionRef.current = Number(data?.revision || 0);
+        if (data?.state && Object.keys(data.state).length > 0) {
+          applySnapshot(data.state);
+        }
       }
       setHydrated(true);
       setSaveStatus("salvo");
@@ -148,6 +156,7 @@ export default function GameSession({ campaign, userId, onExit }) {
         (payload) => {
           if (!active || payload.new?.updated_by === userId) return;
           suppressSaveUntilRef.current = Date.now() + 1200;
+          revisionRef.current = Number(payload.new?.revision || revisionRef.current);
           applySnapshot(payload.new?.state || {});
           setSaveStatus("sincronizado");
         }
@@ -269,8 +278,8 @@ export default function GameSession({ campaign, userId, onExit }) {
 
   async function exitToCampaigns() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    await persistSnapshot(snapshot());
-    onExit();
+    const saved = await persistSnapshot(snapshot());
+    if (saved) onExit();
   }
 
   const currentLevelUpNick = levelUpQueue[0];
@@ -309,10 +318,10 @@ export default function GameSession({ campaign, userId, onExit }) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className={`text-[10px] ${saveStatus.includes("erro") ? "text-[#d26b54]" : "text-[#8b7b70]"}`}>
+          <span className={`text-[10px] ${saveStatus.includes("erro") || saveStatus === "conflito" ? "text-[#d26b54]" : "text-[#8b7b70]"}`}>
             {saveStatus}
           </span>
-          <button onClick={() => persistSnapshot()} className="text-[#9d897c] hover:text-[#e8ddd0]" aria-label="Salvar agora"><Save size={16} /></button>
+          <button onClick={() => persistSnapshot()} disabled={saveStatus === "conflito"} className="text-[#9d897c] hover:text-[#e8ddd0] disabled:opacity-40" aria-label="Salvar agora"><Save size={16} /></button>
         </div>
       </header>
 
