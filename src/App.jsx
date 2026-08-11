@@ -30,7 +30,6 @@ import {
   applyHpEffects,
   applyJournalUpdates,
   applyXpAwards,
-  EMPTY_JOURNAL,
   GAME_SCHEMA_VERSION,
   initPlayer,
   parseDirectives,
@@ -75,7 +74,7 @@ export default function App({ onExit }) {
   const [revealedRegions, setRevealedRegions] = useState([]);
   const [currentRegion, setCurrentRegion] = useState(null);
   const [combat, setCombat] = useState(null);
-  const [journal, setJournal] = useState(EMPTY_JOURNAL);
+  const [journal, setJournal] = useState({ summary: "", objective: "", clues: [], npcs: [], decisions: [] });
   const [view, setView] = useState("chat");
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState("carregando");
@@ -214,18 +213,14 @@ export default function App({ onExit }) {
 
   function applyMasterDirectives(reply, { advanceTurnAfter = false } = {}) {
     const directives = parseDirectives(reply);
-    if (directives.cleanText) {
-      setMessages((previous) => [...previous, { role: "model", text: directives.cleanText }]);
-    }
+    if (directives.cleanText) setMessages((previous) => [...previous, { role: "model", text: directives.cleanText }]);
     if (directives.testMatches.length) setPendingTests(directives.testMatches);
 
     let nextPlayers = players;
     if (directives.xpMatches.length) {
       const xpResult = applyXpAwards(nextPlayers, directives.xpMatches);
       nextPlayers = xpResult.players;
-      if (xpResult.levelUps.length) {
-        setLevelUpQueue((queue) => [...queue, ...xpResult.levelUps]);
-      }
+      if (xpResult.levelUps.length) setLevelUpQueue((queue) => [...queue, ...xpResult.levelUps]);
     }
     if (directives.damageMatches.length || directives.healMatches.length) {
       nextPlayers = applyHpEffects(nextPlayers, directives.damageMatches, directives.healMatches);
@@ -241,9 +236,7 @@ export default function App({ onExit }) {
 
     let nextCombat = combat;
     if (directives.startCombat) nextCombat = sanitizeCombat(directives.startCombat, nextPlayers);
-    if (directives.enemyDamageMatches.length) {
-      nextCombat = applyEnemyDamage(nextCombat, directives.enemyDamageMatches);
-    }
+    if (directives.enemyDamageMatches.length) nextCombat = applyEnemyDamage(nextCombat, directives.enemyDamageMatches);
     if (directives.endCombat) nextCombat = null;
     else if (advanceTurnAfter && nextCombat) nextCombat = advanceCombatTurn(nextCombat, nextPlayers);
     if (nextCombat !== combat) setCombat(nextCombat);
@@ -282,70 +275,31 @@ export default function App({ onExit }) {
   }
 
   function changeHp(playerIdx, delta) {
-    setPlayers((previous) =>
-      previous.map((player, index) =>
-        index !== playerIdx || !player
-          ? player
-          : { ...player, hp: Math.max(0, Math.min(player.maxHp, player.hp + delta)) }
-      )
-    );
+    setPlayers((previous) => previous.map((player, index) => index !== playerIdx || !player ? player : { ...player, hp: Math.max(0, Math.min(player.maxHp, player.hp + delta)) }));
   }
 
   function addItem(playerIdx, item) {
-    setPlayers((previous) =>
-      previous.map((player, index) => {
-        if (index !== playerIdx || !player || player.inventory.length >= 20) return player;
-        return {
-          ...player,
-          inventory: [...player.inventory, item.trim().slice(0, 80)].filter(Boolean),
-        };
-      })
-    );
+    setPlayers((previous) => previous.map((player, index) => {
+      if (index !== playerIdx || !player || player.inventory.length >= 20) return player;
+      return { ...player, inventory: [...player.inventory, item.trim().slice(0, 80)].filter(Boolean) };
+    }));
   }
 
   function removeItem(playerIdx, itemIdx) {
-    setPlayers((previous) =>
-      previous.map((player, index) =>
-        index === playerIdx && player
-          ? { ...player, inventory: player.inventory.filter((_, current) => current !== itemIdx) }
-          : player
-      )
-    );
+    setPlayers((previous) => previous.map((player, index) => index === playerIdx && player ? { ...player, inventory: player.inventory.filter((_, current) => current !== itemIdx) } : player));
   }
 
   function handleLevelChoice(playerIdx, choice) {
-    setPlayers((previous) =>
-      previous.map((player, index) => {
-        if (index !== playerIdx) return player;
-        if (choice.type === "improve") {
-          return {
-            ...player,
-            skills: player.skills.map((skill) =>
-              skill.name === choice.skillName
-                ? { ...skill, level: Math.min(20, skill.level + 1) }
-                : skill
-            ),
-          };
-        }
-        if (choice.type === "unlock") {
-          const locked = player.archetype.lockedSkills.find(
-            (skill) => skill.name === choice.skill?.name
-          );
-          if (!locked) return player;
-          return {
-            ...player,
-            skills: [...player.skills, { ...locked, level: 1 }],
-            archetype: {
-              ...player.archetype,
-              lockedSkills: player.archetype.lockedSkills.filter(
-                (skill) => skill.name !== locked.name
-              ),
-            },
-          };
-        }
-        return player;
-      })
-    );
+    setPlayers((previous) => previous.map((player, index) => {
+      if (index !== playerIdx) return player;
+      if (choice.type === "improve") return { ...player, skills: player.skills.map((skill) => skill.name === choice.skillName ? { ...skill, level: Math.min(20, skill.level + 1) } : skill) };
+      if (choice.type === "unlock") {
+        const locked = player.archetype.lockedSkills.find((skill) => skill.name === choice.skill?.name);
+        if (!locked) return player;
+        return { ...player, skills: [...player.skills, { ...locked, level: 1 }], archetype: { ...player.archetype, lockedSkills: player.archetype.lockedSkills.filter((skill) => skill.name !== locked.name) } };
+      }
+      return player;
+    }));
     setLevelUpQueue((queue) => queue.slice(1));
   }
 
@@ -356,28 +310,15 @@ export default function App({ onExit }) {
   const currentLevelUpNick = levelUpQueue[0];
   const currentLevelUpIdx = players.findIndex((player) => player?.nick === currentLevelUpNick);
 
-  if (!hydrated) {
-    return (
-      <div className="min-h-screen bg-[#0e0b0a] text-[#e8ddd0] flex items-center justify-center font-serif">
-        <p className="text-sm text-[#8a7a6d]">Abrindo save local...</p>
-      </div>
-    );
-  }
+  if (!hydrated) return <div className="min-h-screen bg-[#0e0b0a] text-[#e8ddd0] flex items-center justify-center font-serif"><p className="text-sm text-[#8a7a6d]">Abrindo save local...</p></div>;
 
   return (
     <div className="min-h-screen w-full bg-[#0e0b0a] text-[#e8ddd0] flex flex-col font-serif">
       <header className="border-b border-[#2a1f1a] bg-[#120e0c] px-3 sm:px-5 py-3 flex items-center justify-between gap-2 bg-noise">
         <div className="flex items-center gap-2 min-w-0">
-          {onExit && (
-            <button type="button" onClick={onExit} className="text-[#8f7b6e] hover:text-[#e8ddd0]" aria-label="Voltar">
-              <ArrowLeft size={18} />
-            </button>
-          )}
+          {onExit && <button type="button" onClick={onExit} className="text-[#8f7b6e] hover:text-[#e8ddd0]" aria-label="Voltar"><ArrowLeft size={18} /></button>}
           <Skull size={20} className="ember flex-shrink-0" />
-          <div className="min-w-0">
-            <h1 className="font-display text-sm sm:text-lg tracking-wide truncate">A Mesa Sob a Sombra</h1>
-            <p className="text-[10px] sm:text-xs text-[#8a7a6d]">Modo local · {saveStatus}</p>
-          </div>
+          <div className="min-w-0"><h1 className="font-display text-sm sm:text-lg tracking-wide truncate">A Mesa Sob a Sombra</h1><p className="text-[10px] sm:text-xs text-[#8a7a6d]">Modo local · {saveStatus}</p></div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <button type="button" onClick={exportSave} className="p-2 text-[#a99284] hover:text-[#e8ddd0]" title="Copiar código do save" aria-label="Exportar save"><ClipboardCopy size={16} /></button>
@@ -385,10 +326,8 @@ export default function App({ onExit }) {
           <button type="button" onClick={resetLocalSave} className="p-2 text-[#7f6e63] hover:text-[#d26b54]" title="Nova campanha" aria-label="Resetar save"><RotateCcw size={16} /></button>
         </div>
       </header>
-
       {phase === "create-p1" && <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise"><CharacterCreator playerLabel="Jogador 1" onConfirm={handleP1Confirm} /></div>}
       {phase === "create-p2" && <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise"><CharacterCreator playerLabel="Jogador 2" onConfirm={handleP2Confirm} /></div>}
-
       {phase === "game" && (
         <>
           <div className="flex gap-2 px-3 sm:px-5 py-3 border-b border-[#2a1f1a] bg-[#120e0c]">
@@ -396,34 +335,16 @@ export default function App({ onExit }) {
               if (!player) return null;
               const xpPct = Math.min(100, ((player.xp % XP_PER_LEVEL) / XP_PER_LEVEL) * 100);
               const hpPct = Math.max(0, Math.min(100, (player.hp / player.maxHp) * 100));
-              return (
-                <div key={index} className="flex items-center gap-2 bg-[#1a1310] border border-[#2a1f1a] rounded px-2 py-1.5 flex-1 min-w-0">
-                  <CharacterAvatar skinHex={player.skin.hex} hairHex={player.hair.hex} gender={player.archetype.gender} size={32} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-1"><p className="text-xs font-medium truncate">{player.nick}</p><span className="text-[9px] ember flex items-center gap-0.5"><Star size={8} /> {player.level}</span></div>
-                    <div className="w-full h-1 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden"><div className={hpBarClass(player)} style={{ width: `${hpPct}%`, height: "100%" }} /></div>
-                    <div className="w-full h-0.5 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden"><div className="h-full bg-[#7050a0]" style={{ width: `${xpPct}%` }} /></div>
-                    <p className="text-[9px] text-[#76675d] mt-0.5">HP {player.hp}/{player.maxHp}</p>
-                  </div>
-                </div>
-              );
+              return <div key={index} className="flex items-center gap-2 bg-[#1a1310] border border-[#2a1f1a] rounded px-2 py-1.5 flex-1 min-w-0"><CharacterAvatar skinHex={player.skin.hex} hairHex={player.hair.hex} gender={player.archetype.gender} size={32} /><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-1"><p className="text-xs font-medium truncate">{player.nick}</p><span className="text-[9px] ember flex items-center gap-0.5"><Star size={8} /> {player.level}</span></div><div className="w-full h-1 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden"><div className={hpBarClass(player)} style={{ width: `${hpPct}%`, height: "100%" }} /></div><div className="w-full h-0.5 bg-[#0e0b0a] rounded-full mt-1 overflow-hidden"><div className="h-full bg-[#7050a0]" style={{ width: `${xpPct}%` }} /></div><p className="text-[9px] text-[#76675d] mt-0.5">HP {player.hp}/{player.maxHp}</p></div></div>;
             })}
           </div>
-
           <nav className="flex border-b border-[#2a1f1a] bg-[#120e0c] overflow-x-auto" aria-label="Visões da campanha">
             <button type="button" onClick={() => setView("chat")} className={`min-w-[80px] flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs uppercase tracking-wider font-display ${view === "chat" ? "text-[#e8ddd0] border-b-2 border-[#b8492f]" : "text-[#8a7a6d]"}`}><MessageSquare size={13} /> Mesa</button>
             <button type="button" onClick={() => setView("map")} className={`min-w-[80px] flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs uppercase tracking-wider font-display ${view === "map" ? "text-[#e8ddd0] border-b-2 border-[#b8492f]" : "text-[#8a7a6d]"}`}><MapIcon size={13} /> Mapa</button>
             <button type="button" onClick={() => setView("sheet")} className={`min-w-[80px] flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs uppercase tracking-wider font-display ${view === "sheet" ? "text-[#e8ddd0] border-b-2 border-[#b8492f]" : "text-[#8a7a6d]"}`}><Backpack size={13} /> Fichas</button>
             <button type="button" onClick={() => setView("journal")} className={`min-w-[80px] flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs uppercase tracking-wider font-display ${view === "journal" ? "text-[#e8ddd0] border-b-2 border-[#b8492f]" : "text-[#8a7a6d]"}`}><BookOpen size={13} /> Diário</button>
           </nav>
-
-          {view === "map" ? (
-            <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise"><CampaignMap revealedIds={revealedRegions} currentId={currentRegion} /></div>
-          ) : view === "sheet" ? (
-            <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-5 bg-noise"><div className="grid gap-4 md:grid-cols-2 max-w-4xl mx-auto">{players.map((player, index) => player ? <CharacterSheet key={player.nick} player={player} onChangeHp={(delta) => changeHp(index, delta)} onAddItem={(item) => addItem(index, item)} onRemoveItem={(itemIndex) => removeItem(index, itemIndex)} /> : null)}</div></div>
-          ) : view === "journal" ? (
-            <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-5 bg-noise"><AdventureJournal journal={journal} /></div>
-          ) : (
+          {view === "map" ? <div className="flex-1 overflow-y-auto px-5 py-6 bg-noise"><CampaignMap revealedIds={revealedRegions} currentId={currentRegion} /></div> : view === "sheet" ? <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-5 bg-noise"><div className="grid gap-4 md:grid-cols-2 max-w-4xl mx-auto">{players.map((player, index) => player ? <CharacterSheet key={player.nick} player={player} onChangeHp={(delta) => changeHp(index, delta)} onAddItem={(item) => addItem(index, item)} onRemoveItem={(itemIndex) => removeItem(index, itemIndex)} /> : null)}</div></div> : view === "journal" ? <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-5 bg-noise"><AdventureJournal journal={journal} /></div> : (
             <>
               <main ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-5 py-6 space-y-5 bg-noise">
                 {combat && <CombatTracker combat={combat} players={players} onAdvanceTurn={handleAdvanceTurn} disabled={loading} />}
@@ -433,19 +354,8 @@ export default function App({ onExit }) {
                 {error && <div className="text-center"><p className="text-xs text-[#b8492f] bg-[#1a1310] inline-block px-3 py-2 rounded border border-[#3a2419]">{error}</p></div>}
                 {pendingTests.map((nick) => { const player = players.find((candidate) => candidate?.nick === nick); return player ? <DiceRoller key={nick} player={player} onRoll={handleDiceResult} /> : null; })}
               </main>
-              <QuickActions
-                players={players}
-                combat={combat}
-                disabled={loading}
-                onPrefill={setInput}
-                onSend={(text) => sendMessage(text, { advanceTurnAfter: true })}
-              />
-              <footer className="border-t border-[#2a1f1a] bg-[#120e0c] px-4 sm:px-5 py-4">
-                <div className="flex gap-2 items-end">
-                  <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(input); } }} placeholder={combat ? "Descreva a ação do personagem no turno" : "O que vocês fazem?"} rows={1} maxLength={3000} className="flex-1 bg-[#0e0b0a] border border-[#3a2a24] rounded px-3 py-2.5 text-sm placeholder-[#5a4d43] focus:outline-none focus:border-[#b8492f] resize-none" />
-                  <button type="button" onClick={() => sendMessage(input)} disabled={loading || !input.trim()} className="bg-[#7a2419] hover:bg-[#8e2c1f] disabled:opacity-40 text-[#f0e6da] p-2.5 rounded" aria-label="Enviar"><Send size={18} /></button>
-                </div>
-              </footer>
+              <QuickActions players={players} combat={combat} disabled={loading} onPrefill={setInput} onSend={(text) => sendMessage(text, { advanceTurnAfter: true })} />
+              <footer className="border-t border-[#2a1f1a] bg-[#120e0c] px-4 sm:px-5 py-4"><div className="flex gap-2 items-end"><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(input); } }} placeholder={combat ? "Descreva a ação do personagem no turno" : "O que vocês fazem?"} rows={1} maxLength={3000} className="flex-1 bg-[#0e0b0a] border border-[#3a2a24] rounded px-3 py-2.5 text-sm placeholder-[#5a4d43] focus:outline-none focus:border-[#b8492f] resize-none" /><button type="button" onClick={() => sendMessage(input)} disabled={loading || !input.trim()} className="bg-[#7a2419] hover:bg-[#8e2c1f] disabled:opacity-40 text-[#f0e6da] p-2.5 rounded" aria-label="Enviar"><Send size={18} /></button></div></footer>
             </>
           )}
           {currentLevelUpIdx >= 0 && <LevelUpModal player={players[currentLevelUpIdx]} onChoose={(choice) => handleLevelChoice(currentLevelUpIdx, choice)} />}
