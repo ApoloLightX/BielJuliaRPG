@@ -21,7 +21,11 @@ const creationRepair = readFileSync(
   new URL("./migrations/20260811174500_repair_campaign_creation.sql", import.meta.url),
   "utf8"
 );
-const all = `${base}\n${harden}\n${quota}\n${realtime}\n${creationRepair}`.toLowerCase();
+const returningRepair = readFileSync(
+  new URL("./migrations/20260811180000_allow_owner_campaign_returning.sql", import.meta.url),
+  "utf8"
+);
+const all = `${base}\n${harden}\n${quota}\n${realtime}\n${creationRepair}\n${returningRepair}`.toLowerCase();
 
 describe("Supabase migration security invariants", () => {
   it("habilita RLS nas três tabelas acessíveis pelo cliente", () => {
@@ -53,12 +57,18 @@ describe("Supabase migration security invariants", () => {
   });
 
   it("move a quota de criação para trigger e força owner pelo auth.uid", () => {
-    expect(creationRepair).toContain("create or replace function public.enforce_campaign_creation()" );
+    expect(creationRepair).toContain("create or replace function public.enforce_campaign_creation()");
     expect(creationRepair).toContain("before insert on public.campaigns");
     expect(creationRepair).toContain("new.owner_id := v_user_id");
     expect(creationRepair).toContain("v_owned_count >= 20");
     expect(creationRepair).toContain("owner_id = auth.uid()");
-    expect(creationRepair).not.toContain("public.can_create_campaign()\n");
+  });
+
+  it("permite ao owner ler a campanha imediatamente para INSERT RETURNING", () => {
+    expect(returningRepair).toContain('drop policy if exists "members can read campaigns"');
+    expect(returningRepair).toContain('create policy "members can read campaigns"');
+    expect(returningRepair).toContain("owner_id = auth.uid()");
+    expect(returningRepair).toContain("public.is_campaign_member(id)");
   });
 
   it("protege Presence e Broadcast pelo membership da campanha", () => {
