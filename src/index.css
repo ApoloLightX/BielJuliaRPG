@@ -1,8 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Crimson+Pro:ital,wght@0,400;0,500;1,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
+}
+
+body {
+  font-family: 'Crimson Pro', Georgia, serif;
+  background: #0e0b0a;
+}
+
+.font-display {
+  font-family: 'Cinzel', Georgia, serif;
+}
+
+.font-serif {
+  font-family: 'Crimson Pro', Georgia, serif;
+}
+
+.bg-noise {
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(139, 0, 0, 0.06), transparent 40%),
+    radial-gradient(circle at 80% 70%, rgba(139, 0, 0, 0.05), transparent 45%);
+}
+
+.ember {
+  color: #b8492f;
+}
+
+/* Foto do casal na tela de autenticação. O seletor é restrito ao cabeçalho do AuthScreen. */
+#root > div.min-h-screen > div.w-full.max-w-md.space-y-5 > div.text-center::before {
+  content: '';
+  display: block;
+  width: 100%;
+  aspect-ratio: 1536 / 1031;
+  margin: 0 0 1rem;
+  background: url('/biel-julia.jpg') center / contain no-repeat;
+  border: 1px solid #34251f;
+  border-radius: 0.75rem;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.28);
+}
+
+:focus-visible {
+  outline: 2px solid #b8492f;
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3a2a24;
+  border-radius: 3px;
 }
