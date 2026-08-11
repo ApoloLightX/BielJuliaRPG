@@ -94,6 +94,7 @@ export default function useCampaignPresence({ campaignId, userId, players }) {
   useEffect(() => {
     if (!safeUserId || !campaignId) return undefined;
     let active = true;
+    const remoteTypingTimers = remoteTypingTimersRef.current;
     const topic = `campaign:${campaignId}`;
     const channel = supabase.channel(topic, {
       config: {
@@ -117,17 +118,17 @@ export default function useCampaignPresence({ campaignId, userId, players }) {
         const clientId = typeof payload?.clientId === "string" ? payload.clientId.trim().slice(0, 80) : "";
         typingClientsRef.current = applyTypingClientEvent(typingClientsRef.current, payload);
         if (clientId) {
-          const oldTimer = remoteTypingTimersRef.current.get(clientId);
+          const oldTimer = remoteTypingTimers.get(clientId);
           if (oldTimer) clearTimeout(oldTimer);
           if (payload?.typing === true) {
             const timer = setTimeout(() => {
               typingClientsRef.current.delete(clientId);
-              remoteTypingTimersRef.current.delete(clientId);
+              remoteTypingTimers.delete(clientId);
               refreshTypingUsers();
             }, 3_100);
-            remoteTypingTimersRef.current.set(clientId, timer);
+            remoteTypingTimers.set(clientId, timer);
           } else {
-            remoteTypingTimersRef.current.delete(clientId);
+            remoteTypingTimers.delete(clientId);
           }
         }
         refreshTypingUsers();
@@ -143,8 +144,8 @@ export default function useCampaignPresence({ campaignId, userId, players }) {
     return () => {
       active = false;
       if (localTypingTimerRef.current) clearTimeout(localTypingTimerRef.current);
-      for (const timer of remoteTypingTimersRef.current.values()) clearTimeout(timer);
-      remoteTypingTimersRef.current.clear();
+      for (const timer of remoteTypingTimers.values()) clearTimeout(timer);
+      remoteTypingTimers.clear();
       localTypingRef.current = false;
       channel.untrack().catch(() => {});
       supabase.removeChannel(channel);
