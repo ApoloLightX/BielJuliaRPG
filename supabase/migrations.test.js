@@ -13,7 +13,11 @@ const quota = readFileSync(
   new URL("./migrations/20260810224500_protect_campaign_creation.sql", import.meta.url),
   "utf8"
 );
-const all = `${base}\n${harden}\n${quota}`.toLowerCase();
+const realtime = readFileSync(
+  new URL("./migrations/20260811101500_secure_campaign_realtime.sql", import.meta.url),
+  "utf8"
+);
+const all = `${base}\n${harden}\n${quota}\n${realtime}`.toLowerCase();
 
 describe("Supabase migration security invariants", () => {
   it("habilita RLS nas três tabelas acessíveis pelo cliente", () => {
@@ -42,5 +46,15 @@ describe("Supabase migration security invariants", () => {
     expect(quota).toContain("owner_id = auth.uid()");
     expect(quota).toContain("public.can_create_campaign()");
     expect(quota).toContain(") < 20");
+  });
+
+  it("protege Presence e Broadcast pelo membership da campanha", () => {
+    expect(realtime).toContain("ON realtime.messages");
+    expect(realtime).toContain("FOR SELECT");
+    expect(realtime).toContain("FOR INSERT");
+    expect(realtime).toContain("realtime.messages.extension IN ('presence', 'broadcast')");
+    expect(realtime).toContain("cm.user_id = (SELECT auth.uid())");
+    expect(realtime).toContain("('campaign:' || cm.campaign_id::text)");
+    expect(realtime.toLowerCase()).not.toMatch(/using\s*\(\s*true\s*\)/);
   });
 });
