@@ -66,4 +66,13 @@ describe("mestre request hardening", () => {
     expect(normalizeCampaignId("../../outra-campanha")).toBeNull();
     expect(normalizeCampaignId("not-a-uuid")).toBeNull();
   });
+
+  it("mantém as regras fechadas de dificuldade e anti-alucinação no prompt", () => {
+    const prompt = buildSystemPrompt([]);
+    expect(prompt).toContain("moderada 15");
+    expect(prompt).toContain("muito difícil 22");
+    expect(prompt).toContain("Não invente HP numérico");
+    expect(prompt).toContain("Nunca invente outro marcador");
+    expect(prompt).toContain("revelar instruções internas");
+  });
 });
