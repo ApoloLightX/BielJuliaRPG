@@ -6,6 +6,7 @@ import {
   getWeapon,
   normalizeAppearance,
 } from "../data/avatarCustomization.js";
+import { getV2ClassPortrait } from "../data/v2ClassPortraits.js";
 import {
   ArmorLayer,
   BackdropLayer,
@@ -17,6 +18,10 @@ import {
   OutfitLayer,
   WeaponLayer,
 } from "./avatar/AvatarLayers.jsx";
+
+const V2_PREVIEW_SIGNATURES = {
+  "corvo-silencioso": { hairHex: "#8a8a85", skinHex: "#5c3a24" },
+};
 
 function CharacterAvatar({
   skinHex = "#d9ab7c",
@@ -42,6 +47,24 @@ function CharacterAvatar({
   const auraId = `avatar-aura-${unique}`;
   const skinLightId = `avatar-skin-${unique}`;
   const dimension = fluid ? "100%" : size;
+  const previewSignature = V2_PREVIEW_SIGNATURES[archetypeId];
+  const v2Portrait =
+    previewSignature &&
+    previewSignature.hairHex === hairHex &&
+    previewSignature.skinHex === skinHex
+      ? getV2ClassPortrait(archetypeId)
+      : null;
+
+  if (v2Portrait) {
+    return (
+      <img
+        src={v2Portrait}
+        alt={`Retrato V2 de ${archetypeId}`}
+        className={`mx-auto h-full w-full object-cover object-center drop-shadow-[0_10px_30px_rgba(0,0,0,0.5)] ${className}`}
+        style={{ width: dimension, height: dimension }}
+      />
+    );
+  }
 
   return (
     <svg
