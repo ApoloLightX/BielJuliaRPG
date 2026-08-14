@@ -34,6 +34,23 @@ body {
   color: #b8492f;
 }
 
+/* Class cards use premium V2 identity portraits; every other surface keeps the editable modular avatar. */
+.v2-class-portrait {
+  display: none;
+}
+
+.v2-modular-avatar {
+  display: block;
+}
+
+button.group .v2-class-portrait {
+  display: block;
+}
+
+button.group .v2-modular-avatar {
+  display: none;
+}
+
 /* Foto do casal na tela de autenticação. O seletor é restrito ao cabeçalho do AuthScreen. */
 #root > div.min-h-screen > div.w-full.max-w-md.space-y-5 > div.text-center::before {
   content: '';
