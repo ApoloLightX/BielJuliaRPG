@@ -48,17 +48,11 @@ function CharacterAvatar({
   return (
     <>
       {portrait && (
-        <div
-          role="img"
-          aria-label={`Retrato V2 de ${archetypeId}`}
-          className={`v2-class-portrait mx-auto bg-no-repeat drop-shadow-[0_10px_30px_rgba(0,0,0,0.5)] ${className}`}
-          style={{
-            width: dimension,
-            height: dimension,
-            backgroundImage: `url(${portrait.src})`,
-            backgroundSize: portrait.backgroundSize,
-            backgroundPosition: portrait.position,
-          }}
+        <img
+          src={portrait}
+          alt={`Retrato V2 de ${archetypeId}`}
+          className={`v2-class-portrait mx-auto h-full w-full object-cover object-center drop-shadow-[0_10px_30px_rgba(0,0,0,0.5)] ${className}`}
+          style={{ width: dimension, height: dimension }}
         />
       )}
 
