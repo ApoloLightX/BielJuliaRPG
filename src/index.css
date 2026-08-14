@@ -6,3 +6,21 @@ html, body, #root {
   height: 100%;
   margin: 0;
 }
+
+/* Premium V2 identity art appears only on archetype selection cards.
+   Every other surface keeps the editable modular avatar. */
+.v2-class-portrait {
+  display: none;
+}
+
+.v2-modular-avatar {
+  display: block;
+}
+
+button.group .v2-class-portrait {
+  display: block;
+}
+
+button.group .v2-modular-avatar {
+  display: none;
+}
