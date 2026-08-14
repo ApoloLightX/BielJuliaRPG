@@ -12,12 +12,17 @@ import {
   BackdropLayer,
   BodyLayer,
   ClassFxLayer,
-  FaceLayer,
   HairBackLayer,
   HairFrontLayer,
   OutfitLayer,
   WeaponLayer,
 } from "./avatar/AvatarLayers.jsx";
+import {
+  FacePolishLayer,
+  GripPolishLayer,
+  HairPolishLayer,
+  OutfitPolishLayer,
+} from "./avatar/AvatarPolishLayers.jsx";
 
 function CharacterAvatar({
   skinHex = "#d9ab7c",
@@ -115,6 +120,14 @@ function CharacterAvatar({
           accent={palette.secondary}
           secondary={palette.primary}
         />
+        <OutfitPolishLayer
+          theme={config.theme}
+          style={safeAppearance.outfitStyle}
+          primary={palette.primary}
+          secondary={palette.secondary}
+          metal={palette.metal}
+          accent={palette.secondary}
+        />
         <ellipse
           cx="120"
           cy="106"
@@ -123,14 +136,26 @@ function CharacterAvatar({
           fill={`url(#${skinLightId})`}
           pointerEvents="none"
         />
-        <FaceLayer hairHex={hairHex} mark={safeAppearance.faceMark} accent={palette.secondary} />
+        <FacePolishLayer
+          skinHex={skinHex}
+          hairHex={hairHex}
+          mark={safeAppearance.faceMark}
+          accent={palette.secondary}
+        />
         <HairFrontLayer style={safeAppearance.hairStyle} hairHex={hairHex} />
+        <HairPolishLayer style={safeAppearance.hairStyle} hairHex={hairHex} />
         <WeaponLayer
           phase="front"
           type={weapon.type}
           metal={palette.metal}
           accent={palette.secondary}
           leather="#35251f"
+        />
+        <GripPolishLayer
+          type={weapon.type}
+          leather="#35251f"
+          metal={palette.metal}
+          accent={palette.secondary}
         />
         <ClassFxLayer theme={config.theme} accent={palette.secondary} phase="front" />
         <path
